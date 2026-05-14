@@ -32,9 +32,9 @@ If you set `config.output_relevant_configurations` to True, each tool will also 
 With PR-Agent, you can set configurations by creating a page called `.pr_agent.toml` in the [wiki](https://github.com/the-pr-agent/pr-agent/wiki/pr_agent.toml) of the repo.
 The advantage of this method is that it allows to set configurations without needing to commit new content to the repo - just edit the wiki page and **save**.
 
-<img src="https://codium.ai/images/pr_agent/wiki_configuration.png" alt="wiki_configuration" width="512" />
+<img src="https://qodo.ai/images/pr_agent/wiki_configuration.png" alt="wiki_configuration" width="512" />
 
-Click [here](https://codium.ai/images/pr_agent/wiki_configuration_pr_agent.mp4) to see a short instructional video. We recommend surrounding the configuration content with triple-quotes (or \`\`\`toml), to allow better presentation when displayed in the wiki as markdown.
+Click [here](https://qodo.ai/images/pr_agent/wiki_configuration_pr_agent.mp4) to see a short instructional video. We recommend surrounding the configuration content with triple-quotes (or \`\`\`toml), to allow better presentation when displayed in the wiki as markdown.
 An example content:
 
 ```toml

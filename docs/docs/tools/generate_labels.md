@@ -17,11 +17,11 @@ It can be invoked manually by commenting on any PR:
 
 Invoke the tool manually by commenting `/generate_labels` on any PR:
 
-<img src="https://codium.ai/images/pr_agent/generate_labels_comment.png" alt="Generate Labels" width="512" />
+<img src="https://qodo.ai/images/pr_agent/generate_labels_comment.png" alt="Generate Labels" width="512" />
 
 The tool will analyze the PR and add appropriate labels:
 
-<img src="https://codium.ai/images/pr_agent/generate_labels_result.png" alt="Generate Labels Result" width="512" />
+<img src="https://qodo.ai/images/pr_agent/generate_labels_result.png" alt="Generate Labels Result" width="512" />
 
 ## Configuration options
 

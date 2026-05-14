@@ -59,4 +59,4 @@ We use [tiktoken](https://github.com/openai/tiktoken) to tokenize the patches af
 
 #### Example
 
-<img src="https://codium.ai/images/git_patch_logic.png" alt="Core Abilities" width="768" />
+<img src="https://qodo.ai/images/git_patch_logic.png" alt="Core Abilities" width="768" />

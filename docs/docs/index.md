@@ -61,21 +61,21 @@ PR-Agent offers comprehensive pull request functionalities integrated with vario
 #### [/describe](https://github.com/the-pr-agent/pr-agent/pull/530)
 
 <figure>
-<img src="https://www.codium.ai/images/pr_agent/describe_new_short_main.png" alt="/describe" width="512" />
+<img src="https://www.qodo.ai/images/pr_agent/describe_new_short_main.png" alt="/describe" width="512" />
 </figure>
 <hr>
 
 #### [/review](https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099151)
 
 <figure>
-<img src="https://www.codium.ai/images/pr_agent/review_new_short_main.png" alt="/review" width="512" />
+<img src="https://www.qodo.ai/images/pr_agent/review_new_short_main.png" alt="/review" width="512" />
 </figure>
 <hr>
 
 #### [/improve](https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099159)
 
 <figure>
-<img src="https://www.codium.ai/images/pr_agent/improve_new_short_main.png" alt="/improve" width="512" />
+<img src="https://www.qodo.ai/images/pr_agent/improve_new_short_main.png" alt="/improve" width="512" />
 </figure>
 <hr>
 
@@ -83,6 +83,6 @@ PR-Agent offers comprehensive pull request functionalities integrated with vario
 
 The following diagram illustrates PR-Agent tools and their flow:
 
-![PR-Agent Tools](https://codium.ai/images/pr_agent/diagram-v0.9.png)
+![PR-Agent Tools](https://qodo.ai/images/pr_agent/diagram-v0.9.png)
 
 Check out the [PR Compression strategy](core-abilities/index.md) page for more details on how we convert a code diff to a manageable LLM prompt

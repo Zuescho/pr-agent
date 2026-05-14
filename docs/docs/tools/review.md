@@ -15,7 +15,7 @@ The tool can be triggered automatically every time a new PR is [opened](../usage
 
 Note that the main purpose of the `review` tool is to provide the **PR reviewer** with useful feedback and insights. The PR author, in contrast, may prefer to save time and focus on the output of the [improve](./improve.mdx) tool, which provides actionable code suggestions.
 
-(Read more about the different personas in the PR process and how PR-Agent aims to assist them in our [blog](https://www.codium.ai/blog/understanding-the-challenges-and-pain-points-of-the-pull-request-cycle/))
+(Read more about the different personas in the PR process and how PR-Agent aims to assist them in our [blog](https://www.qodo.ai/blog/understanding-the-challenges-and-pain-points-of-the-pull-request-cycle/))
 
 ## Example usage
 
@@ -23,11 +23,11 @@ Note that the main purpose of the `review` tool is to provide the **PR reviewer*
 
 Invoke the tool manually by commenting `/review` on any PR:
 
-<img src="https://codium.ai/images/pr_agent/review_comment.png" alt="review comment" width="512" />
+<img src="https://qodo.ai/images/pr_agent/review_comment.png" alt="review comment" width="512" />
 
 After ~30 seconds, the tool will generate a review for the PR:
 
-<img src="https://codium.ai/images/pr_agent/review3.png" alt="review" width="512" />
+<img src="https://qodo.ai/images/pr_agent/review3.png" alt="review" width="512" />
 
 If you want to edit [configurations](#configuration-options), add the relevant ones to the command:
 

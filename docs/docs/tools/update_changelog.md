@@ -14,9 +14,9 @@ It can be invoked manually by commenting on any PR:
 
 ## Example usage
 
-<img src="https://codium.ai/images/pr_agent/update_changelog_comment.png" alt="update_changelog_comment" width="768" />
+<img src="https://qodo.ai/images/pr_agent/update_changelog_comment.png" alt="update_changelog_comment" width="768" />
 
-<img src="https://codium.ai/images/pr_agent/update_changelog.png" alt="update_changelog" width="768" />
+<img src="https://qodo.ai/images/pr_agent/update_changelog.png" alt="update_changelog" width="768" />
 
 ## Configuration options
 

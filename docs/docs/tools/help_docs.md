@@ -32,15 +32,15 @@ See more configuration options in the [Configuration options](#configuration-opt
 
 [//]: # (#### Asking a question about this repository:)
 
-[//]: # (![help_docs on the documentation of this repository]&#40;https://codium.ai/images/pr_agent/help_docs_comment.png&#41;{width=512})
+[//]: # (![help_docs on the documentation of this repository]&#40;https://qodo.ai/images/pr_agent/help_docs_comment.png&#41;{width=512})
 
 **Asking a question about another repository**
 
-<img src="https://codium.ai/images/pr_agent/help_docs_comment_explicit_git.png" alt="help_docs on the documentation of another repository" width="512" />
+<img src="https://qodo.ai/images/pr_agent/help_docs_comment_explicit_git.png" alt="help_docs on the documentation of another repository" width="512" />
 
 **Response**:
 
-<img src="https://codium.ai/images/pr_agent/help_docs_response.png" alt="help_docs response" width="512" />
+<img src="https://qodo.ai/images/pr_agent/help_docs_response.png" alt="help_docs response" width="512" />
 
 ## Run automatically when a new issue is opened
 

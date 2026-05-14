@@ -17,11 +17,11 @@ It can be invoked manually by commenting on any PR:
 
 Invoke the tool manually by commenting `/add_docs` on any PR:
 
-<img src="https://codium.ai/images/pr_agent/add_docs_comment.png" alt="Add Docs" width="512" />
+<img src="https://qodo.ai/images/pr_agent/add_docs_comment.png" alt="Add Docs" width="512" />
 
 The tool will generate documentation suggestions as inline code suggestions:
 
-<img src="https://codium.ai/images/pr_agent/add_docs_result.png" alt="Add Docs Result" width="512" />
+<img src="https://qodo.ai/images/pr_agent/add_docs_result.png" alt="Add Docs Result" width="512" />
 
 ### Language-specific documentation styles
 

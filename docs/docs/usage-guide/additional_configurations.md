@@ -14,7 +14,7 @@ To print all the available configurations as a comment on your PR, you can use t
 /config
 ```
 
-<img src="https://codium.ai/images/pr_agent/possible_config1.png" alt="possible_config1" width="512" />
+<img src="https://qodo.ai/images/pr_agent/possible_config1.png" alt="possible_config1" width="512" />
 
 To view the **actual** configurations used for a specific tool, after all the user settings are applied, you can add for each tool a `--config.output_relevant_configurations=true` suffix.
 For example:
@@ -25,7 +25,7 @@ For example:
 
 Will output an additional field showing the actual configurations used for the `improve` tool.
 
-<img src="https://codium.ai/images/pr_agent/possible_config2.png" alt="possible_config2" width="512" />
+<img src="https://qodo.ai/images/pr_agent/possible_config2.png" alt="possible_config2" width="512" />
 
 ## Ignoring files from analysis
 
@@ -159,7 +159,7 @@ add_repo_metadata = true
 ```
 
 PR-Agent automatically searches for repository metadata files in your PR's head branch root directory. By default, it looks for:
-[AGENTS.MD](https://agents.md/), [QODO.MD](https://docs.codium.ai/qodo-documentation/qodo-command/getting-started/setup-and-quickstart), [CLAUDE.MD](https://www.anthropic.com/engineering/claude-code-best-practices).
+[AGENTS.MD](https://agents.md/), [QODO.MD](https://docs.qodo.ai/qodo-documentation/qodo-command/getting-started/setup-and-quickstart), [CLAUDE.MD](https://www.anthropic.com/engineering/claude-code-best-practices).
 
 You can also specify custom filenames to search for:
 

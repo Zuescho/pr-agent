@@ -44,8 +44,8 @@ This results in a more refined and valuable set of suggestions for the user, sav
 
 ## Example Results
 
-<img src="https://codium.ai/images/pr_agent/self_reflection1.png" alt="self_reflection" width="768" />
-<img src="https://codium.ai/images/pr_agent/self_reflection2.png" alt="self_reflection" width="768" />
+<img src="https://qodo.ai/images/pr_agent/self_reflection1.png" alt="self_reflection" width="768" />
+<img src="https://qodo.ai/images/pr_agent/self_reflection2.png" alt="self_reflection" width="768" />
 
 ## Appendix - Relevant Configuration Options
 

@@ -14,11 +14,11 @@ It can be invoked manually by commenting on any PR:
 
 ## Example usage
 
-<img src="https://codium.ai/images/pr_agent/similar_issue_original_issue.png" alt="similar_issue_original_issue" width="768" />
+<img src="https://qodo.ai/images/pr_agent/similar_issue_original_issue.png" alt="similar_issue_original_issue" width="768" />
 
-<img src="https://codium.ai/images/pr_agent/similar_issue_comment.png" alt="similar_issue_comment" width="768" />
+<img src="https://qodo.ai/images/pr_agent/similar_issue_comment.png" alt="similar_issue_comment" width="768" />
 
-<img src="https://codium.ai/images/pr_agent/similar_issue.png" alt="similar_issue" width="768" />
+<img src="https://qodo.ai/images/pr_agent/similar_issue.png" alt="similar_issue" width="768" />
 
 Note that to perform retrieval, the `similar_issue` tool indexes all the repo previous issues (once).
 

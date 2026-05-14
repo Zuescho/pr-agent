@@ -18,9 +18,9 @@ It can be invoked manually by commenting on any PR:
 
 Invoke the `help` tool by commenting on a PR with:
 
-<img src="https://codium.ai/images/pr_agent/help1.png" alt="Help tool input" width="750" />
+<img src="https://qodo.ai/images/pr_agent/help1.png" alt="Help tool input" width="750" />
 
 
 Response will include a list of available tools:
 
-<img src="https://codium.ai/images/pr_agent/help2.png" alt="Help tool output" width="750" />
+<img src="https://qodo.ai/images/pr_agent/help2.png" alt="Help tool output" width="750" />
