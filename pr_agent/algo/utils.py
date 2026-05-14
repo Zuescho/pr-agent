@@ -815,18 +815,19 @@ def try_fix_yaml(response_text: str,
             pass
 
     # second fallback - try to extract only range from first ```yaml to the last ```
-    snippet_pattern = r'```yaml([\s\S]*?)```(?=\s*$|")'
+    snippet_pattern = r'```(yaml|yml)?([\s\S]*?)```(?=\s*$|")'
     snippet = re.search(snippet_pattern, '\n'.join(response_text_lines_copy))
     if not snippet:
         snippet = re.search(snippet_pattern, response_text_original) # before we removed the "```"
     if snippet:
-        snippet_text = snippet.group()
+        # group(2) is the snippet body, without the ``` fences or the optional yaml/yml language identifier
+        snippet_text = snippet.group(2)
         try:
-            data = yaml.safe_load(snippet_text.removeprefix('```yaml').rstrip('`'))
+            data = yaml.safe_load(snippet_text)
             get_logger().info(f"Successfully parsed AI prediction after extracting yaml snippet")
             return data
-        except:
-            pass
+        except Exception as e:
+            get_logger().debug(f"Failed to parse AI prediction after extracting yaml snippet: {e}")
 
 
     # third fallback - try to remove leading and trailing curly brackets
