@@ -73,9 +73,35 @@ async def run_action():
         print(f"Failed to parse JSON: {e}")
         return
 
+    # For workflow_run events, validate and resolve the PR URL up front so that
+    # repo settings and the language/artifact injection below run against the
+    # correct PR (the dispatch happens in the elif branch further down).
+    # workflow_run is delivered for the 'requested', 'in_progress' and 'completed'
+    # activity types; only act on 'completed' (so the upstream workflow — and its
+    # artifacts — are ready) and only when it originated from a pull_request with
+    # a resolvable PR (fork PRs carry an empty pull_requests list).
+    workflow_run_pr_url = None
+    if GITHUB_EVENT_NAME == "workflow_run":
+        workflow_run = event_payload.get("workflow_run", {})
+        action = event_payload.get("action")
+        if action != "completed":
+            get_logger().info(f"Skipping workflow_run: action is '{action}', not 'completed'")
+            return
+        if workflow_run.get("event") != "pull_request":
+            get_logger().info(f"Skipping workflow_run: originating event is '{workflow_run.get('event')}', not 'pull_request'")
+            return
+        pull_requests = workflow_run.get("pull_requests", [])
+        if not pull_requests:
+            get_logger().info("Skipping workflow_run: no pull_requests found in payload (fork PRs are not supported)")
+            return
+        workflow_run_pr_url = pull_requests[0].get("url")
+        if not workflow_run_pr_url:
+            get_logger().info("Skipping workflow_run: pull_requests[0] has no url")
+            return
+
     try:
         get_logger().info("Applying repo settings")
-        pr_url = event_payload.get("pull_request", {}).get("html_url")
+        pr_url = event_payload.get("pull_request", {}).get("html_url") or workflow_run_pr_url
         if pr_url:
             apply_repo_settings(pr_url)
             get_logger().info(f"enable_custom_labels: {get_settings().config.enable_custom_labels}")
@@ -223,27 +249,11 @@ async def run_action():
                     else:
                         await PRAgent().handle_request(url, body)
 
-    # Handle workflow_run event (triggered after another workflow completes, e.g. after a terraform plan)
+    # Handle workflow_run event (triggered after another workflow completes, e.g. after a terraform plan).
+    # Validation, PR-URL resolution and repo-settings application already happened up front (see above),
+    # so the language/artifact injection ran against the correct PR before the tools are dispatched here.
     elif GITHUB_EVENT_NAME == "workflow_run":
-        workflow_run = event_payload.get("workflow_run", {})
-        if workflow_run.get("event") != "pull_request":
-            get_logger().info(f"Skipping workflow_run: originating event is '{workflow_run.get('event')}', not 'pull_request'")
-            return
-
-        pull_requests = workflow_run.get("pull_requests", [])
-        if not pull_requests:
-            get_logger().info("Skipping workflow_run: no pull_requests found in payload (fork PRs are not supported)")
-            return
-
-        pr_url = pull_requests[0].get("url")
-        if not pr_url:
-            get_logger().info("Skipping workflow_run: pull_requests[0] has no url")
-            return
-
-        try:
-            apply_repo_settings(pr_url)
-        except Exception as e:
-            get_logger().info(f"github action: failed to apply repo settings for workflow_run: {e}")
+        pr_url = workflow_run_pr_url
 
         auto_review = get_setting_or_env("GITHUB_ACTION.AUTO_REVIEW", None)
         if auto_review is None:

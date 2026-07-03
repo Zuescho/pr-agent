@@ -188,12 +188,13 @@ async def test_issue_comment_from_user_is_processed(monkeypatch, tmp_path, resto
     assert handled == [("https://api.github.com/repos/org/repo/pulls/1", "/review")]
 
 
-def _write_workflow_run_event(tmp_path, originating_event="pull_request", pull_requests=None):
+def _write_workflow_run_event(tmp_path, originating_event="pull_request", pull_requests=None,
+                              action="completed"):
     if pull_requests is None:
         pull_requests = [{"url": "https://api.github.com/repos/org/repo/pulls/42", "number": 42}]
     event_path = tmp_path / "event.json"
     event_path.write_text(json.dumps({
-        "action": "completed",
+        "action": action,
         "workflow_run": {
             "id": 9999,
             "event": originating_event,
@@ -281,3 +282,82 @@ async def test_workflow_run_skips_when_pull_requests_empty(monkeypatch, tmp_path
     await github_action_runner.run_action()
 
     assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_skips_non_completed_action(monkeypatch, tmp_path, restore_github_settings):
+    # workflow_run is delivered for 'requested'/'in_progress'/'completed'; only
+    # 'completed' should run, otherwise the tools fire prematurely (before the
+    # upstream workflow's artifacts exist) and again on completion.
+    runs = []
+    _patch_workflow_run_deps(monkeypatch, runs)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(_write_workflow_run_event(tmp_path, action="requested")))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    await github_action_runner.run_action()
+
+    assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_applies_repo_settings_before_injection(monkeypatch, tmp_path, restore_github_settings):
+    """Regression for the ordering bug: on workflow_run, repo settings must be
+    applied *before* the artifact-injection block, so injected extra_instructions
+    are not clobbered by a late apply_repo_settings. Here the (faked) repo settings
+    seed pr_reviewer.extra_instructions, and the artifact block appends to it — the
+    reviewer must see BOTH by the time it runs.
+    """
+    from tests.unittest._settings_helpers import restore_settings, snapshot_settings
+
+    saved = snapshot_settings((
+        "pr_reviewer.extra_instructions",
+        "artifacts.enable", "artifacts.artifact_path", "artifacts.artifact_type",
+    ))
+
+    artifact_file = tmp_path / "plan.txt"
+    artifact_file.write_text("PLAN_ARTIFACT_CONTENT")
+
+    def fake_apply_repo_settings(pr_url):
+        # simulate a repo .pr_agent.toml that sets extra_instructions
+        get_settings().set("pr_reviewer.extra_instructions", "REPO_RULE")
+
+    monkeypatch.setattr(github_action_runner, "apply_repo_settings", fake_apply_repo_settings)
+
+    captured = {}
+
+    class FakeReviewer:
+        def __init__(self, pr_url):
+            self.pr_url = pr_url
+
+        async def run(self):
+            captured["extra_instructions"] = str(get_settings().pr_reviewer.extra_instructions)
+
+    class _Noop:
+        def __init__(self, pr_url):
+            pass
+
+        async def run(self):
+            pass
+
+    monkeypatch.setattr(github_action_runner, "PRReviewer", FakeReviewer)
+    monkeypatch.setattr(github_action_runner, "PRDescription", _Noop)
+    monkeypatch.setattr(github_action_runner, "PRCodeSuggestions", _Noop)
+    monkeypatch.setattr(github_action_runner, "get_setting_or_env",
+                        lambda key, default=None: {"GITHUB_ACTION.AUTO_REVIEW": True}.get(key, default))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(_write_workflow_run_event(tmp_path)))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("ARTIFACT_PATH", str(artifact_file))
+    monkeypatch.setenv("ARTIFACT_TYPE", "generic")
+
+    try:
+        await github_action_runner.run_action()
+    finally:
+        restore_settings(saved)
+
+    assert "extra_instructions" in captured, "PRReviewer.run was not reached"
+    assert "REPO_RULE" in captured["extra_instructions"], "repo settings were not applied"
+    assert "PLAN_ARTIFACT_CONTENT" in captured["extra_instructions"], \
+        "artifact context was clobbered — repo settings ran after injection"
