@@ -309,6 +309,7 @@ Shows: bot identity (App ID), configured model + fallbacks, Ollama endpoint, AI 
 
 ## Operating notes
 
+- **Unraid version**: run **7.3.2 or later**. It fixes CVE-2026-3838 (a path-traversal command-execution vulnerability in the WebGUI's `update.php`) and ships security fixes across openssl, nginx, curl, samba, php, openssh, and more. The 7.3.0 release added an optional fixed-MAC field to Docker templates — our template doesn't use it (the bot reaches out to GitHub/Ollama; nothing needs to reach it by a stable MAC), and 7.3.x leaves existing templates unchanged when networking is owned by the template (as ours is). Our template uses only the standard `Container version="2"` schema with `Variable`/`Path`/`Port` config types on a `bridge` network — fully compatible with 7.3.2, no template changes required.
 - **Cost**: Ollama Cloud bills per token. `kimi-k2.7-code` is optimized for lower thinking-token usage; a typical PR review is well under $0.05. Monitor at <https://ollama.com/settings/keys>.
 - **Model retirements**: Ollama periodically retires cloud models. Check <https://ollama.com/search?c=cloud> and the retirement table in their docs. Update `CONFIG__MODEL` / `CONFIG__FALLBACK_MODELS` when needed.
 - **Restart policy**: the compose file sets `unless-stopped`, so reviews survive Unraid reboots once the Docker service comes back.
