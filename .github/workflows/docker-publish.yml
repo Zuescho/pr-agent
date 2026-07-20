@@ -104,7 +104,10 @@ jobs:
         # metadata-action produced the tag list (latest/sha-*/vX.Y.Z). Re-tag the
         # built image with each and push. Skips empty tag lines.
         run: |
-          IFS=$'\n' read -d '' -ra TAGS <<< "$TAGS_OUT"
+          # || true: read -d '' returns non-zero at EOF (no NUL byte in the input),
+          # which trips the step's default set -e before the for loop runs.
+          # The array is still populated correctly; the || true swallows the EOF return.
+          IFS=$'\n' read -d '' -ra TAGS <<< "$TAGS_OUT" || true
           for tag in "${TAGS[@]}"; do
             [ -z "$tag" ] && continue
             docker tag ghcr.io/zuescho/pr-agent:tmp "$tag"
