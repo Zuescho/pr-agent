@@ -9,6 +9,8 @@
 # The status module + shim are baked into the image. Secrets still come from the
 # runtime volume mount at /app/pr_agent/settings_prod/.secrets.toml.
 
+# NOTE: requires local/pr-agent:github_app to exist. Build it first (see above).
+# A "pull access denied for local/pr-agent" error means you skipped that step.
 FROM local/pr-agent:github_app
 
 # status_page.py and status_app.py already live under pr_agent/ in the build

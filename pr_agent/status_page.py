@@ -18,11 +18,16 @@ pr-agent FastAPI app, showing:
 Zero changes to upstream pr-agent code. This module is mounted into the app
 object by pr_agent/status_app.py (the entrypoint shim) at container startup.
 
-Privacy: the status page shows repo/PR URLs and model names — no diff content,
-no secrets, no API keys. Guard it behind your tunnel's access control (Cloudflare
-Access, Tailscale ACL, basic auth on the reverse proxy) if you don't want it
-public. It does not enforce auth itself, by design — the webhook endpoint already
-needs to be public, and adding auth here would be security theater next to that.
+Privacy: the status page shows repo/PR URLs and model names — no secrets, no
+API keys. At the default CONFIG.VERBOSITY_LEVEL (0/1), no diff or prompt content
+appears in the log tail (PR bodies are logged at DEBUG, below this sink's INFO
+threshold). If an operator sets CONFIG.VERBOSITY_LEVEL>=2, pr-agent logs full
+system/user prompts and AI responses at INFO, which this page's recent-log tail
+will surface — lower verbosity or restrict status page access in that case.
+Guard /status behind your tunnel's access control (Cloudflare Access, Tailscale
+ACL, basic auth on the reverse proxy) regardless. The page enforces no auth
+itself, by design — the webhook endpoint must be public, so layering auth only
+on /status would be security theater.
 """
 
 import time
@@ -37,9 +42,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 LOG_BUFFER: deque = deque(maxlen=500)
 _PROCESS_START = time.time()
 # In-flight reviews older than this are considered finished (no explicit
-# completion marker in the light scope; the LLM call length is bounded by
-# CONFIG.AI_TIMEOUT, default 300s, so 6 min is a safe upper bound).
-_INFLIGHT_TTL_SECONDS = 360
+# completion marker in the light scope). The LLM call is bounded by
+# CONFIG.AI_TIMEOUT (upstream default 120s; this deployment sets 300s). We
+# derive the TTL as 2x the configured AI_TIMEOUT so a review still running
+# near its deadline stays visible; if an operator raises AI_TIMEOUT, the TTL
+# scales automatically. Falls back to 360s if config is unreadable at import.
+def _ttl_from_config():
+    try:
+        from pr_agent.config_loader import get_settings
+        return max(360, int(get_settings().config.ai_timeout) * 2)
+    except Exception:
+        return 360
+_INFLIGHT_TTL_SECONDS = _ttl_from_config()
 _INFLIGHT_RE = None  # compiled lazily in _inflight_reviews()
 
 
@@ -92,20 +106,24 @@ def _inflight_reviews(log_entries):
     import re
     global _INFLIGHT_RE
     if _INFLIGHT_RE is None:
-        # Match pr-agent's actual log format:
-        #   "Performing auto command '/review', for api_url='https://.../pull/42'"
-        #   "Processing comment on PR api_url='https://.../pull/42', comment_body='...'"
-        # {api_url=} renders as api_url='...'. Require the closing quote so the
-        # URL can't absorb the trailing quote / comma.
+        # Two anchored patterns (not one alternation with lazy `.*?`) to avoid
+        # O(n^2) backtracking on lines that contain the trigger phrase but no
+        # rendered api_url=' (e.g. exception tracebacks embedding the source
+        # line). Python's re disallows reusing a group name across `|`, so
+        # each branch gets its own url group; we normalize below.
+        # {api_url=} renders as api_url='...'. Require the closing quote so
+        # the URL can't absorb the trailing quote / comma.
         _INFLIGHT_RE = re.compile(
-            r"(?:Performing auto command '(?P<cmd>[^']+)'|Processing comment on PR).*?api_url='(?P<url>[^']+)'"
+            r"Performing auto command '(?P<cmd>[^']+)', for api_url='(?P<url1>[^']+)'"
+            r"|"
+            r"Processing comment on PR api_url='(?P<url2>[^']+)'"
         )
     now = time.time()
-    started = {}  # url -> {api_url, command, started_at}
+    started = {}  # url -> {api_url, command, age_seconds}
     for ts, line in log_entries:
         m = _INFLIGHT_RE.search(line)
         if m:
-            url = m.group("url")
+            url = m.group("url1") or m.group("url2")
             started[url] = {
                 "api_url": url,
                 "command": m.group("cmd") or "/ask",
@@ -200,18 +218,18 @@ async function refresh(){
   try {
     const d = await (await fetch('/status.json')).json();
     document.getElementById('bot').textContent = d.bot;
-    document.getElementById('model').innerHTML = '<code>'+d.model+'</code>';
-    document.getElementById('fallback').innerHTML = (d.fallback_models||[]).map(m=>'<code>'+m+'</code>').join(' ');
+    document.getElementById('model').textContent = d.model;
+    document.getElementById('fallback').textContent = (d.fallback_models||[]).join(' ');
     document.getElementById('ollama').textContent = d.ollama_api_base;
     document.getElementById('timeout').textContent = d.ai_timeout_seconds + 's';
-    document.getElementById('webhook').innerHTML = '<code>POST '+d.webhook_path+'</code>';
+    document.getElementById('webhook').textContent = 'POST ' + d.webhook_path;
     document.getElementById('uptime').textContent = fmtDur(d.uptime_seconds);
     document.getElementById('started').textContent = d.started_at;
     const inf = document.getElementById('inflight');
     inf.innerHTML = '';
     (d.inflight_reviews||[]).forEach(r=>{
       const el = document.createElement('div'); el.className='inflight-item';
-      el.innerHTML = '<code>'+r.api_url+'</code> — '+r.command;
+      el.textContent = r.api_url + ' — ' + r.command;
       inf.appendChild(el);
     });
     document.getElementById('inflight-count').textContent = '('+(d.inflight_reviews||[]).length+')';

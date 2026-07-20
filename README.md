@@ -273,7 +273,6 @@ The `CONFIG__MODEL` field's description in the Unraid template lists every curre
 | `ollama/gemma4:31b` | Frontier at size, reasoning + coding |
 | `ollama/mistral-large-3` | Enterprise general-purpose MoE |
 | `ollama/gpt-oss:120b` | OpenAI open-weight reasoning |
-| `ollama/gemini-3-flash-preview` | Fast frontier, preview |
 | `ollama/nemotron-3-ultra` | NVIDIA, long-running agents |
 | `ollama/nemotron-3-super` | NVIDIA 120B MoE, 12B active |
 
@@ -323,7 +322,7 @@ Shows: bot identity (App ID), configured model + fallbacks, Ollama endpoint, AI 
 
 | Symptom | Cause / Fix |
 |---|---|
-| Container exits at boot with `FATAL: github.webhook_secret is not configured` | You didn't fill in `webhook_secret` in `.secrets.toml`, or it still says `REPLACE_WITH_WEBHOOK_SECRET`. Set it to the secret you generated in step 1. |
+| Container exits at boot with `FATAL: github.webhook_secret is not configured (or is blank/placeholder)` | You didn't create/fill `/mnt/user/appdata/pr-agent/.secrets.toml`, or `webhook_secret` is empty/whitespace/still the placeholder. The guard refuses to boot rather than run an unauthenticated webhook. Create the file from `secrets.example.toml` and fill in the secret from step 1. |
 | `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image). Build the base first. |
 | GitHub App **Recent Deliveries** shows 403 | Wrong webhook secret, or the tunnel isn't forwarding. Re-check the secret matches between the App settings and `.secrets.toml`. |
 | GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an Ollama Cloud auth error (wrong `api_key`) or a retired model (404 from Ollama). Update `api_key` or `CONFIG__MODEL`. |

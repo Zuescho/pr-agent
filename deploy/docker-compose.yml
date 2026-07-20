@@ -8,7 +8,7 @@
 #
 # Then on Unraid either:
 #   - install the "Docker Compose Manager" plugin and point it at this file, or
-#   - use the Add Container UI with the values mapped below (see SETUP.md).
+#   - use the Add Container UI with the values mapped below (see README.md).
 #
 # SECRETS: mount the filled-in secrets file read-only at the settings_prod path.
 #   /app/pr_agent/settings_prod/.secrets.toml  (from secrets.example.toml, filled in)
