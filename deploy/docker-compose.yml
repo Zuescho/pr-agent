@@ -21,9 +21,12 @@
 
 services:
   pr-agent:
-    # Use the -status image (base github_app + the /status page). If you don't
-    # want the status page, swap to local/pr-agent:github_app.
-    image: local/pr-agent:github_app-status
+    # The status image (base github_app + the /status page). Prebuilt on every
+    # push to main / vX.Y.Z tag by .github/workflows/docker-publish.yml and
+    # published to GHCR (public, no login needed to pull). To use a locally
+    # built image instead, swap to local/pr-agent:github_app-status. If you
+    # don't want the status page, use local/pr-agent:github_app (base only).
+    image: ghcr.io/zuescho/pr-agent:latest
     container_name: pr-agent
     restart: unless-stopped
     ports:

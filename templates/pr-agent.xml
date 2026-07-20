@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <Container version="2">
     <Name>pr-agent</Name>
-    <Repository>local/pr-agent:github_app-status</Repository>
+    <Repository>ghcr.io/zuescho/pr-agent:latest</Repository>
     <Registry/>
     <Network>bridge</Network>
     <Shell>sh</Shell>
     <Privileged>false</Privileged>
     <Support>https://github.com/the-pr-agent/pr-agent/issues</Support>
     <Project>https://github.com/the-pr-agent/pr-agent</Project>
-    <Overview>Self-hosted AI code reviewer (the-pr-agent/pr-agent) running as a GitHub App. Receives pull_request webhooks from GitHub, reviews diffs with an LLM (Ollama Cloud by default; Neuralwatt or any OpenAI-compatible endpoint via the model prefix), and posts comments back as a distinct bot identity. No GitHub Actions runner spin-up; the webhook acks immediately and the LLM call runs on a background task with no GitHub-side timeout. Includes a /status web page showing bot identity, configured model + provider, in-flight reviews, and a live log tail. Build: (1) docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .  (2) docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .  (run both from the cloned pr-agent repo root on Unraid).</Overview>
+    <Overview>Self-hosted AI code reviewer (the-pr-agent/pr-agent) running as a GitHub App. Receives pull_request webhooks from GitHub, reviews diffs with an LLM (Ollama Cloud by default; Neuralwatt or any OpenAI-compatible endpoint via the model prefix), and posts comments back as a distinct bot identity. No GitHub Actions runner spin-up; the webhook acks immediately and the LLM call runs on a background task with no GitHub-side timeout. Includes a /status web page showing bot identity, configured model + provider, in-flight reviews, and a live log tail. The image is prebuilt by CI and published to GHCR: docker pull ghcr.io/zuescho/pr-agent:latest (public, no login needed). To build locally instead: (1) docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .  (2) docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .  and set the Repository below to local/pr-agent:github_app-status.</Overview>
     <Category>Cloud: Productivity:Tools</Category>
     <WebUI>http://[IP]:[PORT:3000]/status</WebUI>
     <Icon>https://raw.githubusercontent.com/the-pr-agent/pr-agent/main/docs/assets/pr_agent_logo.png</Icon>
