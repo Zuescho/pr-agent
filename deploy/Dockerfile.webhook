@@ -1,0 +1,31 @@
+# Minimal webhook-only image: base github_app + the webhook_app shim (boot
+# guard, no /status route). Suitable for putting the port directly behind a
+# public tunnel without guarding a status page.
+#
+# Build the base first (from the repo root):
+#   docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
+# Then this:
+#   docker build -t local/pr-agent:github_app-webhook -f deploy/Dockerfile.webhook .
+#
+# BASE_IMAGE lets CI swap in a registry-pushed base (ghcr.io/...) without
+# changing the local build path. Defaults to local/pr-agent:github_app so the
+# documented local build works unchanged.
+#
+# A "pull access denied for local/pr-agent" error means you skipped the base
+# build (or, in CI, that BASE_IMAGE points at an image not present in the
+# daemon).
+ARG BASE_IMAGE=local/pr-agent:github_app
+FROM ${BASE_IMAGE}
+
+# webhook_app.py already lives under pr_agent/ in the build context, so the
+# base image's ADD pr_agent pr_agent already includes it if you rebuilt the
+# base. If you did NOT rebuild the base, copy just this file in:
+COPY pr_agent/webhook_app.py /app/pr_agent/webhook_app.py
+
+# Serve via the webhook shim. Same gunicorn/uvicorn config as upstream, just a
+# different app module path. --forwarded-allow-ips is scoped to private CIDRs
+# (the tunnel/reverse proxy sits in 10.x/172.16.x/127.x) rather than upstream's
+# "*": the webhook port is reachable via a public tunnel, so trusting
+# X-Forwarded-* from any client would let a spoofed header force https scheme
+# assumptions or bypass IP logic.
+CMD ["python", "-m", "gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-c", "pr_agent/servers/gunicorn_config.py", "--forwarded-allow-ips", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1", "pr_agent.webhook_app:app"]
