@@ -11,7 +11,6 @@ This README is the single source of truth: what it is, how to deploy it, and eve
 - **Distinct bot identity** — reviews post as `<your-app-name>[bot]`, not `github-actions[bot]`. One GitHub App install covers every repo you add it to.
 - **No GitHub Actions runner spin-up, no GitHub-side review timeout** — the webhook receiver acks GitHub in milliseconds and runs the LLM call on a background task. A slow model taking 2-3 minutes per PR is a non-issue.
 - **Pluggable LLM backend** — pick any current model via one env var. Defaults to Ollama Cloud; switch to Neuralwatt or any OpenAI-compatible endpoint by changing the model prefix (`ollama/...` → `openai/...`) and the matching secrets section. No code changes, no patches.
-- **Status page** — `/status` (HTML, auto-refreshing) and `/status.json` showing bot identity, configured model, in-flight reviews, and a live log tail.
 - **Unraid container template** — install via the Unraid "Add Container" GUI with a labeled form for every setting (LLM picker, tool toggles, review tuning). No YAML editing required.
 - **Tools** — auto-runs `/describe` (AI PR description), `/review` (inline code review), `/improve` (committable code suggestions) on every PR; re-runs `/review` on new commits. Also available on-demand via PR comments: `/review`, `/improve`, `/describe`, `/ask <question>`, `/update_changelog`, `/add_docs`, `/analyze`.
 
@@ -67,10 +66,10 @@ GitHub PR event ──webhook──▶  your tunnel (Cloudflare/Tailscale)  ─�
 | `secrets.example.toml` | Template for `.secrets.toml` (provider key + GitHub App credentials) |
 | `templates/pr-agent.xml` | Unraid container template — GUI form for every setting |
 | `deploy/docker-compose.yml` | Docker Compose file (env-var config, secrets mount, healthcheck) |
-| `deploy/Dockerfile.status` | Thin child image that layers the `/status` page on the base (accepts a `BASE_IMAGE` build arg) |
-| `.github/workflows/docker-publish.yml` | CI workflow that builds and publishes the status image to GHCR on push to `main` or a `vX.Y.Z` tag |
-| `pr_agent/status_page.py` | Status page router + loguru in-memory sink + HTML/JSON endpoints |
-| `pr_agent/status_app.py` | Entrypoint shim: imports upstream app, mounts status router, **enforces webhook-secret guard at boot** |
+| `deploy/Dockerfile.webhook` | Minimal webhook-only child image (HMAC-guarded webhook + healthcheck, no `/status` page) — the one you deploy (accepts a `BASE_IMAGE` build arg) |
+| `.github/workflows/docker-publish.yml` | CI workflow that builds and publishes the webhook image to GHCR on push to `main` or a `vX.Y.Z` tag |
+| `pr_agent/webhook_app.py` | Entrypoint shim: imports upstream app, **enforces webhook-secret guard at boot** (no status page mounted) |
+| `deploy/Dockerfile.status`, `pr_agent/status_page.py`, `pr_agent/status_app.py` | Optional status-page image (adds `/status` + `/status.json` showing in-flight reviews). Use only if you want the dashboard and are willing to guard it — it exposes repo/PR activity. Not built by the CI workflow. |
 
 No upstream files are modified — all overrides are via env vars + a child Docker image + a CI workflow. This keeps pr-agent updates painless: `git pull` (GitHub Actions rebuilds and publishes the image to GHCR automatically) or local rebuild.
 
@@ -114,7 +113,7 @@ ghcr.io/zuescho/pr-agent:<version>    # vX.Y.Z tag, e.g. 1.2.3
 docker pull ghcr.io/zuescho/pr-agent:latest
 ```
 
-Then use `ghcr.io/zuescho/pr-agent:latest` as the image in the compose file / Unraid template (it already defaults to this; see step 5). The package is public-readable, so no `docker login` is needed to pull. The image includes the `/status` page.
+Then use `ghcr.io/zuescho/pr-agent:latest` as the image in the compose file / Unraid template (it already defaults to this; see step 5). The package is public-readable, so no `docker login` is needed to pull. The image is webhook-only (no `/status` page) — the port can go directly behind a public tunnel without an extra auth layer.
 
 **Option B — build locally (if you forked further or want a custom tag):**
 
@@ -122,11 +121,11 @@ Then use `ghcr.io/zuescho/pr-agent:latest` as the image in the compose file / Un
 # 1. Base image (the github_app target from the upstream Dockerfile):
 docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
 
-# 2. Status-page layer (thin child image, no upstream files edited):
-docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
+# 2. Webhook image (thin child — HMAC-guarded webhook + healthcheck, no /status page):
+docker build -t local/pr-agent:github_app-webhook -f deploy/Dockerfile.webhook .
 ```
 
-The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the `/status` web page on top. The compose file and Unraid template default to `ghcr.io/zuescho/pr-agent:latest`; swap to `local/pr-agent:github_app-status` if you built locally. If you don't want the status page, use the base tag `local/pr-agent:github_app` (or `ghcr.io/zuescho/pr-agent:github_app` — note: the CI workflow only publishes the status image; the base is an intermediate not pushed).
+The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the webhook shim on top (boot guard, no status page). The compose file and Unraid template default to `ghcr.io/zuescho/pr-agent:latest`; swap to `local/pr-agent:github_app-webhook` if you built locally. (To serve the `/status` dashboard instead, build `deploy/Dockerfile.status` — but that exposes repo/PR activity and needs guarding at the reverse-proxy layer.)
 
 > **First run:** the very first push to `main` after adding this workflow creates the `ghcr.io/zuescho/pr-agent` package under your user account. Until it exists, `docker pull` 404s — wait for the first workflow run to finish (check the Actions tab). The package is public by default; if you want it private, toggle it under <https://github.com/users/Zuescho/packages/container/pr-agent/settings> (private means `docker login ghcr.io` is then required to pull).
 
@@ -194,8 +193,6 @@ The container listens on port 3000 for `POST /api/v1/github_webhooks`. Unraid is
 
 The public URL goes into the GitHub App's **Webhook URL** field (step 1). The path must be `/api/v1/github_webhooks`.
 
-The same host also serves the status page at `/status` (HTML, auto-refreshing) and `/status.json` (machine-readable). **Guard it** — see Security below.
-
 ### 5. Start the container
 
 #### Option A — Unraid container template (recommended)
@@ -225,14 +222,7 @@ From outside your network:
 ```bash
 curl -s https://<YOUR-TUNNEL-HOST>/
 # → {"status":"ok"}
-
-# Status page (in-flight reviews + recent log, in-browser):
-# open https://<YOUR-TUNNEL-HOST>/status
-
-# Or machine-readable:
-curl -s https://<YOUR-TUNNEL-HOST>/status.json | python -m json.tool
 ```
-
 Then in your GitHub App settings, scroll to **Recent Deliveries**. After step 7 you'll see webhook events with their HTTP responses. GitHub retries failed deliveries for up to 3 days, so a transient tunnel blip won't lose reviews.
 
 ### 7. Install the App on your repos
@@ -251,9 +241,6 @@ Comment `/review`, `/improve`, `/describe`, or `/ask <question>` on any PR to re
 ```bash
 # Container logs (live)
 docker logs -f pr-agent
-
-# Status page (in-flight reviews + recent log, in-browser):
-# open https://<YOUR-TUNNEL-HOST>/status
 
 # Confirm the App authenticates (from inside the container)
 docker exec -it pr-agent python -c "from pr_agent.config_loader import get_settings; print('app_id:', get_settings().github.app_id, 'model:', get_settings().config.model)"
@@ -304,8 +291,7 @@ All non-secret config is via **environment variables** (double-underscore separa
 
 | Env var | Default | Description |
 |---|---|---|
-| `GUNICORN_WORKERS` | `1` | Number of gunicorn worker processes. **Keep at 1** so the `/status` page's in-memory log buffer sees ALL webhook activity (each worker has its own buffer). The webhook acks in milliseconds and reviews run as background tasks, so one worker handles concurrent reviews fine for a personal bot. Raise only if you review many PRs simultaneously (and accept that `/status` will show only one worker's logs). |
-| `CONFIG__LOG_LEVEL` | `INFO` | Log verbosity: `INFO` (normal) or `DEBUG` (verbose, for troubleshooting). |
+| `GUNICORN_WORKERS` | `1` | Number of gunicorn worker processes. Keep at 1 — the webhook acks in milliseconds and reviews run as background tasks, so one worker handles concurrent reviews fine for a personal bot. Raise only if you review many PRs simultaneously. |
 
 ### Secrets (in `.secrets.toml`, NOT env vars)
 
@@ -395,28 +381,26 @@ The same `openai/` prefix works for any OpenAI-compatible endpoint. Set `[openai
 | local LM Studio | `http://host.docker.internal:1234/v1` | `openai/<your-loaded-model>` |
 
 ---
+## Endpoints
 
-## The `/status` page
+The webhook image exposes only two paths on port 3000 — nothing else to guard:
 
 | Endpoint | Returns |
 |---|---|
-| `GET /` | `{"status":"ok"}` — healthcheck (used by Docker healthcheck) |
-| `GET /status` | HTML page (auto-refreshing every 5s) |
-| `GET /status.json` | Machine-readable JSON |
+| `POST /api/v1/github_webhooks` | The GitHub webhook receiver. HMAC-guarded (`X-Hub-Signature-256`, constant-time compare); rejects forged payloads with 403. This is the only path GitHub POSTs to. |
+| `GET /` | `{"status":"ok"}` — healthcheck (used by the Docker healthcheck). Harmless. |
 
-Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (provider from the model prefix + the base URL litellm actually uses — Ollama wins if both `[openai]` and `[ollama]` are set, surfaced as a `⚠ provider_mismatch` warning), AI timeout, webhook path, deployment type, uptime, start time, **in-flight reviews** (PR URL + command + age), and the last 80 log lines.
+There is **no `/status` dashboard** in this image — the port can go directly behind a public tunnel (Cloudflare Tunnel / Tailscale Funnel) without an extra auth layer. The only thing a random visitor can reach is the `{"status":"ok"}` healthcheck. Use `docker logs pr-agent` for debugging.
 
-**In-flight detection** is heuristic: it parses recent log lines for pr-agent's `Performing auto command '<cmd>', for api_url='...'` and `Processing comment on PR api_url='...'` markers, and drops entries older than 6 minutes (the LLM call is bounded by `CONFIG__AI_TIMEOUT`, default 300s). It's an operational dashboard, not an authoritative registry.
-
-**What it does NOT show**: diff content, secrets, API keys, the GitHub private key, or the webhook secret. Only repo/PR URLs, model names, and log lines (which pr-agent does not log secrets in).
+> **Optional status image:** if you later want a live dashboard showing in-flight reviews, the model, and a log tail, build `deploy/Dockerfile.status` instead. It adds `/status` + `/status.json`, but those routes are unauthenticated and expose repo/PR activity — only run that image behind a guarded reverse proxy, not a raw public tunnel.
 
 ---
 
 ## Security
 
 - **Webhook authentication is enforced at boot.** The container refuses to start if `github.webhook_secret` is missing, empty, or still the placeholder. This closes a real upstream gap: `get_body()` in `pr_agent/servers/github_app.py` only calls `verify_signature()` inside `if webhook_secret:`, so a misconfigured secret would silently leave the endpoint unauthenticated. Fail-fast > silent vuln.
-- **Guard the `/status` page.** It shows repo/PR URLs and the model name — not secrets, but not something you want public. Gate it at the tunnel/reverse-proxy layer: Cloudflare Access, Tailscale ACL, or basic auth on Caddy/Traefik. The page deliberately does no auth of its own (the webhook endpoint must be public, so layering auth only on `/status` would be security theater).
-- **`--forwarded-allow-ips` is scoped to private CIDRs** (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1) in the status image's CMD, not the upstream `*` wildcard. Your tunnel/reverse proxy sits in those ranges; clients can't spoof `X-Forwarded-*` headers.
+- **No status page to guard.** The deployed webhook image exposes only the HMAC-guarded webhook and a harmless `{"status":"ok"}` healthcheck. The port can go directly behind a public tunnel (Cloudflare Tunnel / Tailscale Funnel) with no extra auth layer — there's nothing else to protect. (The optional status image in `deploy/Dockerfile.status` DOES expose repo/PR activity and would need guarding at the reverse proxy; it's not what the CI workflow builds.)
+- **`--forwarded-allow-ips` is scoped to private CIDRs** (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1) in the webhook image's CMD, not the upstream `*` wildcard. Your tunnel/reverse proxy sits in those ranges; clients can't spoof `X-Forwarded-*` headers.
 - **HMAC signature validation** (`pr_agent/servers/utils.py:verify_signature`) uses `hmac.compare_digest` (constant-time) and raises 403 on missing/mismatched signatures.
 
 ---
@@ -442,8 +426,7 @@ Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (pr
 | `docker pull` returns `denied: denied to access` | The package was set to private under <https://github.com/users/Zuescho/packages/container/pr-agent/settings>. Either set it public, or `docker login ghcr.io -u Zuescho` with a PAT that has `read:packages`. |
 | `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image) in a local build. Build the base first, or use the prebuilt GHCR image (`ghcr.io/zuescho/pr-agent:latest`) instead. |
 | GitHub App **Recent Deliveries** shows 403 | Wrong webhook secret, or the tunnel isn't forwarding. Re-check the secret matches between the App settings and `.secrets.toml`. |
-| GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an LLM auth error (wrong `api_key` for your provider) or a retired/wrong model (404). Update the key in `.secrets.toml` or `CONFIG__MODEL`. Also check the `/status` page's **LLM endpoint** row: the bracket shows the provider derived from your model prefix, the URL is the endpoint litellm actually uses (Ollama wins if both sections are set). If you see a `⚠ BOTH [openai] and [ollama] api_base are set` warning, both provider sections are filled in `.secrets.toml` — comment out the one for the provider you're NOT using. |
-| `/status` shows no in-flight reviews even when a review is running | The review may have emitted >80 log lines (large PR) pushing the start marker out of the recent window, OR you're running `GUNICORN_WORKERS>1` and the review is on a different worker. Keep workers at 1. |
+| GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an LLM auth error (wrong `api_key` for your provider) or a retired/wrong model (404). Update the key in `.secrets.toml` or `CONFIG__MODEL`. If both `[openai]` and `[ollama]` sections are filled in `.secrets.toml`, Ollama silently wins the `api_base` — comment out the one for the provider you're NOT using. |
 | Reviews post as `github-actions[bot]` not `<your-app>[bot]` | `deployment_type` isn't `app`, or the App isn't installed on the repo. Check `.secrets.toml` has `deployment_type = "app"` and the App is installed via the Install App tab. |
 | `Model not found` / 404 errors in logs | The model id is wrong, retired, or the prefix doesn't match your provider. Verify: Ollama at <https://ollama.com/search?c=cloud>, Neuralwatt at `curl https://api.neuralwatt.com/v1/models`, or your provider's model list. Update `CONFIG__MODEL`. Remember the prefix must match the filled-in secrets section (`ollama/` ↔ `[ollama]`, `openai/` ↔ `[openai]`), and only ONE section should be filled in. |
 
@@ -455,7 +438,7 @@ Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (pr
 
 **Why Ollama Cloud as the default instead of local Ollama / another provider?** No GPU box required, any model in the catalog, pay-per-token. To switch to local Ollama later, change `api_base` in `.secrets.toml` and `CONFIG__MODEL` — no code changes. To switch to Neuralwatt or any other OpenAI-compatible provider, change the model prefix to `openai/...`, fill in `[openai]`, and comment out `[ollama]` — see "Choosing an LLM provider" above. The provider layer is config-only by design: pr-agent already routes by model prefix through litellm, so adding a provider is never a code change in this fork.
 
-**Why a child Docker image for the status page instead of editing upstream?** Zero merge debt. `git pull` + rebuild picks up upstream fixes; the status layer is two files copied on top. No patches to reapply.
+**Why a child Docker image instead of editing upstream?** Zero merge debt. `git pull` + rebuild picks up upstream fixes; the webhook shim is one file copied on top. No patches to reapply.
 
 **Why env vars for config instead of a mounted `configuration.toml`?** pr-agent's `config_loader.py` loads `settings_prod/.secrets.toml` but NOT `settings_prod/configuration.toml` — a config file mounted there is silently ignored. Env vars (dynaconf env_loader) are the supported override path and win over upstream defaults. JSON-array and boolean env vars parse correctly to lists/bools even with `AUTO_CAST_FOR_DYNACONF=false` (verified — dynaconf's `parse_with_toml` handles it).
 
@@ -463,4 +446,4 @@ Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (pr
 
 ## Credits
 
-This fork builds on [`the-pr-agent/pr-agent`](https://github.com/the-pr-agent/pr-agent) (formerly `Codium-ai/pr-agent`), the open-source AI PR reviewer donated to the community by Qodo. All credit for the review/improve/describe tools, PR compression, and multi-provider LLM support belongs to that project. This fork adds only the Unraid deployment scaffolding, the status page, and the webhook-secret boot guard.
+This fork builds on [`the-pr-agent/pr-agent`](https://github.com/the-pr-agent/pr-agent) (formerly `Codium-ai/pr-agent`), the open-source AI PR reviewer donated to the community by Qodo. All credit for the review/improve/describe tools, PR compression, and multi-provider LLM support belongs to that project. This fork adds only the Unraid deployment scaffolding, the webhook-only image with its boot guard, and the CI build pipeline.

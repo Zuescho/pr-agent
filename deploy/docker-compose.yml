@@ -21,11 +21,13 @@
 
 services:
   pr-agent:
-    # The status image (base github_app + the /status page). Prebuilt on every
-    # push to main / vX.Y.Z tag by .github/workflows/docker-publish.yml and
-    # published to GHCR (public, no login needed to pull). To use a locally
-    # built image instead, swap to local/pr-agent:github_app-status. If you
-    # don't want the status page, use local/pr-agent:github_app (base only).
+    # The webhook image (base github_app + the webhook_app shim — HMAC-guarded
+    # webhook + GET / healthcheck, NO /status page). Prebuilt on every push to
+    # main / vX.Y.Z tag by .github/workflows/docker-publish.yml and published to
+    # GHCR (public, no login needed to pull). To use a locally built image
+    # instead, swap to local/pr-agent:github_app-webhook. To serve the /status
+    # page (which exposes repo/PR activity — guard it), build the status image
+    # instead: local/pr-agent:github_app-status from deploy/Dockerfile.status.
     image: ghcr.io/zuescho/pr-agent:latest
     container_name: pr-agent
     restart: unless-stopped
@@ -72,11 +74,10 @@ services:
       PR_CODE_SUGGESTIONS__NUM_CODE_SUGGESTIONS_PER_CHUNK: "3"
 
       # --- Server ---
-      # 1 worker so the /status page's in-memory log buffer sees ALL webhook
-      # activity. The webhook acks in milliseconds and reviews run as background
-      # tasks, so a single worker handles concurrent reviews fine for a personal
-      # bot. Raise only if you review many PRs simultaneously (and accept that
-      # /status will show only one worker's logs).
+      # 1 worker keeps state simple; the webhook acks in milliseconds and
+      # reviews run as background tasks, so a single worker handles concurrent
+      # reviews fine for a personal bot. Raise only if you review many PRs
+      # simultaneously.
       GUNICORN_WORKERS: "1"
       CONFIG__LOG_LEVEL: "INFO"
     volumes:

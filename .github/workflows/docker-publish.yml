@@ -1,16 +1,15 @@
-name: Docker publish
-
-# Builds the self-hosted pr-agent image (base github_app target + the status-page
-# child image) and publishes the status image to GHCR (GitHub Container Registry).
+# Builds the self-hosted pr-agent image (base github_app target + the webhook-only
+# child image) and publishes the webhook image to GHCR (GitHub Container Registry).
 #
 # On push to main -> publish :latest + :<short-sha>.
 # On a v<semver> tag -> publish :<version> + :<major> + :<major>.<minor> + :latest.
 #
-# The status image is the one you deploy. The base github_app image is built only
-# as an intermediate (loaded into the buildx daemon, not pushed): the status
-# Dockerfile FROMs it via the BASE_IMAGE build arg.
+# The webhook image is the one you deploy (no /status route — suitable for
+# putting the port directly behind a public tunnel). The base github_app image
+# is built only as an intermediate (loaded into the buildx daemon, not pushed):
+# the webhook Dockerfile FROMs it via the BASE_IMAGE build arg.
 #
-# Images (all point at the status image, which includes the /status page):
+# Images (all point at the webhook image — HMAC-guarded webhook + GET / healthcheck):
 #   ghcr.io/zuescho/pr-agent:latest
 #   ghcr.io/zuescho/pr-agent:sha-<short>     (push to main)
 #   ghcr.io/zuescho/pr-agent:<version>      (vX.Y.Z tag)
@@ -86,23 +85,23 @@ jobs:
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 
-      - name: Build status image
+      - name: Build webhook image
         # Plain `docker build` (not buildx) so it uses the Docker daemon directly
         # and CAN resolve `FROM local/pr-agent:github_app` loaded by the previous
         # step. The buildx docker-container driver's BuildKit resolver goes
         # through registries, not the daemon image store, so docker/build-push-action
         # would fail here with "pull access denied". The base layer still gets GHA
-        # caching from the previous step; this thin child build just adds two files.
+        # caching from the previous step; this thin child build just adds one file.
         run: |
           docker build \
             --build-arg BASE_IMAGE=local/pr-agent:github_app \
-            -f deploy/Dockerfile.status \
+            -f deploy/Dockerfile.webhook \
             -t ghcr.io/zuescho/pr-agent:tmp \
             .
 
-      - name: Tag and push status image
+      - name: Tag and push webhook image
         # metadata-action produced the tag list (latest/sha-*/vX.Y.Z). Re-tag the
-        # built image with each and push. Skips empty tag lines.
+        # built webhook image with each and push. Skips empty tag lines.
         run: |
           # || true: read -d '' returns non-zero at EOF (no NUL byte in the input),
           # which trips the step's default set -e before the for loop runs.
