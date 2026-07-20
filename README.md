@@ -64,14 +64,15 @@ GitHub PR event ──webhook──▶  your tunnel (Cloudflare/Tailscale)  ─�
 | File | Purpose |
 |---|---|
 | `README.md` | This file — complete deployment + settings reference |
-| `secrets.example.toml` | Template for `.secrets.toml` (Ollama key + GitHub App credentials) |
+| `secrets.example.toml` | Template for `.secrets.toml` (provider key + GitHub App credentials) |
 | `templates/pr-agent.xml` | Unraid container template — GUI form for every setting |
 | `deploy/docker-compose.yml` | Docker Compose file (env-var config, secrets mount, healthcheck) |
-| `deploy/Dockerfile.status` | Thin child image that layers the `/status` page on the base |
+| `deploy/Dockerfile.status` | Thin child image that layers the `/status` page on the base (accepts a `BASE_IMAGE` build arg) |
+| `.github/workflows/docker-publish.yml` | CI workflow that builds and publishes the status image to GHCR on push to `main` or a `vX.Y.Z` tag |
 | `pr_agent/status_page.py` | Status page router + loguru in-memory sink + HTML/JSON endpoints |
 | `pr_agent/status_app.py` | Entrypoint shim: imports upstream app, mounts status router, **enforces webhook-secret guard at boot** |
 
-No upstream files are modified — all overrides are via env vars + a child Docker image. This keeps pr-agent updates painless: `git pull` + rebuild.
+No upstream files are modified — all overrides are via env vars + a child Docker image + a CI workflow. This keeps pr-agent updates painless: `git pull` (GitHub Actions rebuilds and publishes the image to GHCR automatically) or local rebuild.
 
 ---
 
@@ -97,9 +98,25 @@ Create the app, then:
 
 > ⚠️ **The webhook secret is mandatory.** The container refuses to start if it's missing or still set to the placeholder — this prevents the webhook endpoint from silently accepting unauthenticated requests (see Security below).
 
-### 2. Build the Docker images on Unraid
+### 2. Get the Docker image
 
-On the Unraid host (web terminal or SSH), from this repo's root:
+Every push to `main` (and every `vX.Y.Z` tag) triggers the `docker-publish.yml` workflow, which builds the image and publishes it to GHCR:
+
+```
+ghcr.io/zuescho/pr-agent:latest      # tracks main; rebuild on every push
+ghcr.io/zuescho/pr-agent:sha-<short>  # immutable, per-commit
+ghcr.io/zuescho/pr-agent:<version>    # vX.Y.Z tag, e.g. 1.2.3
+```
+
+**Option A — pull the prebuilt image (recommended, no build needed):**
+
+```bash
+docker pull ghcr.io/zuescho/pr-agent:latest
+```
+
+Then use `ghcr.io/zuescho/pr-agent:latest` as the image in the compose file / Unraid template (it already defaults to this; see step 5). The package is public-readable, so no `docker login` is needed to pull. The image includes the `/status` page.
+
+**Option B — build locally (if you forked further or want a custom tag):**
 
 ```bash
 # 1. Base image (the github_app target from the upstream Dockerfile):
@@ -109,7 +126,9 @@ docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfi
 docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
 ```
 
-The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the `/status` web page on top. The compose file and Unraid template default to `local/pr-agent:github_app-status`. If you don't want the status page, swap the image tag to `local/pr-agent:github_app`.
+The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the `/status` web page on top. The compose file and Unraid template default to `ghcr.io/zuescho/pr-agent:latest`; swap to `local/pr-agent:github_app-status` if you built locally. If you don't want the status page, use the base tag `local/pr-agent:github_app` (or `ghcr.io/zuescho/pr-agent:github_app` — note: the CI workflow only publishes the status image; the base is an intermediate not pushed).
+
+> **First run:** the very first push to `main` after adding this workflow creates the `ghcr.io/zuescho/pr-agent` package under your user account. Until it exists, `docker pull` 404s — wait for the first workflow run to finish (check the Actions tab). The package is public by default; if you want it private, toggle it under <https://github.com/users/Zuescho/packages/container/pr-agent/settings> (private means `docker login ghcr.io` is then required to pull).
 
 ### 3. Create the secrets file on Unraid
 
@@ -408,7 +427,7 @@ Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (pr
 - **Cost**: LLM providers bill per token. `kimi-k2.7-code` is optimized for lower thinking-token usage; a typical PR review is well under $0.05. Monitor at your provider's dashboard: Ollama Cloud &lt;https://ollama.com/settings/keys&gt;, Neuralwatt &lt;https://portal.neuralwatt.com&gt;.
 - **Model retirements**: providers periodically retire models. Check Ollama &lt;https://ollama.com/search?c=cloud&gt; or Neuralwatt `curl https://api.neuralwatt.com/v1/models` and update `CONFIG__MODEL` / `CONFIG__FALLBACK_MODELS` when needed.
 - **Restart policy**: the compose file sets `unless-stopped`, so reviews survive Unraid reboots once the Docker service comes back.
-- **Updates**: to pick up upstream pr-agent fixes, `git pull` in this directory and re-run both `docker build` commands from step 2, then restart the container. No patches to reapply — all your customizations are env vars + the child image.
+- **Updates**: to pick up upstream pr-agent fixes or your own changes on `main`, the `docker-publish.yml` workflow rebuilds and publishes `ghcr.io/zuescho/pr-agent:latest` automatically. On Unraid, `docker pull ghcr.io/zuescho/pr-agent:latest` (or update the container in the Docker UI) and restart. No patches to reapply — all your customizations are env vars + the mounted secrets file. To pin a specific build, use its `sha-<short>` or `vX.Y.Z` tag. If you build locally instead, `git pull` and re-run both `docker build` commands from step 2.
 - **Multiple repos**: one App install covers every repo you add in the Install App tab. No per-repo config needed — each reviewed repo can optionally drop a `.pr_agent.toml` at its root to override tools per-repo.
 - **Forked PRs**: if you accept external contributor PRs, the webhook handler works regardless of PR source (it uses the GitHub API to fetch PR data, not a local checkout).
 
@@ -419,7 +438,9 @@ Shows: bot identity (App ID), configured model + fallbacks, **LLM endpoint** (pr
 | Symptom | Cause / Fix |
 |---|---|
 | Container exits at boot with `FATAL: github.webhook_secret is not configured (or is blank/placeholder)` | You didn't create/fill `/mnt/user/appdata/pr-agent/.secrets.toml`, or `webhook_secret` is empty/whitespace/still the placeholder. The guard refuses to boot rather than run an unauthenticated webhook. Create the file from `secrets.example.toml` and fill in the secret from step 1. |
-| `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image). Build the base first. |
+| `docker pull ghcr.io/zuescho/pr-agent:latest` returns `not found: manifest unknown` | The first CI build hasn't completed (or `main` hasn't been pushed since the workflow was added). Check the **Actions** tab for a green `Docker publish` run. The package only exists after the first successful workflow run. |
+| `docker pull` returns `denied: denied to access` | The package was set to private under <https://github.com/users/Zuescho/packages/container/pr-agent/settings>. Either set it public, or `docker login ghcr.io -u Zuescho` with a PAT that has `read:packages`. |
+| `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image) in a local build. Build the base first, or use the prebuilt GHCR image (`ghcr.io/zuescho/pr-agent:latest`) instead. |
 | GitHub App **Recent Deliveries** shows 403 | Wrong webhook secret, or the tunnel isn't forwarding. Re-check the secret matches between the App settings and `.secrets.toml`. |
 | GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an LLM auth error (wrong `api_key` for your provider) or a retired/wrong model (404). Update the key in `.secrets.toml` or `CONFIG__MODEL`. Also check the `/status` page's **LLM endpoint** row: the bracket shows the provider derived from your model prefix, the URL is the endpoint litellm actually uses (Ollama wins if both sections are set). If you see a `⚠ BOTH [openai] and [ollama] api_base are set` warning, both provider sections are filled in `.secrets.toml` — comment out the one for the provider you're NOT using. |
 | `/status` shows no in-flight reviews even when a review is running | The review may have emitted >80 log lines (large PR) pushing the start marker out of the recent window, OR you're running `GUNICORN_WORKERS>1` and the review is on a different worker. Keep workers at 1. |

@@ -1,0 +1,117 @@
+name: Docker publish
+
+# Builds the self-hosted pr-agent image (base github_app target + the status-page
+# child image) and publishes the status image to GHCR (GitHub Container Registry).
+#
+# On push to main -> publish :latest + :<short-sha>.
+# On a v<semver> tag -> publish :<version> + :<major> + :<major>.<minor> + :latest.
+#
+# The status image is the one you deploy. The base github_app image is built only
+# as an intermediate (loaded into the buildx daemon, not pushed): the status
+# Dockerfile FROMs it via the BASE_IMAGE build arg.
+#
+# Images (all point at the status image, which includes the /status page):
+#   ghcr.io/zuescho/pr-agent:latest
+#   ghcr.io/zuescho/pr-agent:sha-<short>     (push to main)
+#   ghcr.io/zuescho/pr-agent:<version>      (vX.Y.Z tag)
+#
+# Pull on Unraid:
+#   docker pull ghcr.io/zuescho/pr-agent:latest
+#
+# Permissions: the default GITHUB_TOKEN authenticates to GHCR (packages: write).
+# No secrets to configure. The package is public-readable once created (set under
+# https://github.com/users/Zuescho/packages/container/pr-agent/settings if you
+# want private, but public is fine for a personal fork).
+#
+# amd64 only — arm64 via QEMU makes the base pip install take 15-20+ min, and an
+# Unraid box is almost always x86. Add linux/arm64 later only if you run arm.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/zuescho/pr-agent
+          # On main push: latest + short sha. On vX.Y.Z tag: version + majors + latest.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build base (github_app target)
+        # Build the base image and load it into the buildx daemon under a stable
+        # local tag. Not pushed — the status Dockerfile FROMs it. load:true makes
+        # it available in the daemon so the next step's BASE_IMAGE can resolve it.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          target: github_app
+          push: false
+          load: true
+          tags: local/pr-agent:github_app
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Build status image
+        # Plain `docker build` (not buildx) so it uses the Docker daemon directly
+        # and CAN resolve `FROM local/pr-agent:github_app` loaded by the previous
+        # step. The buildx docker-container driver's BuildKit resolver goes
+        # through registries, not the daemon image store, so docker/build-push-action
+        # would fail here with "pull access denied". The base layer still gets GHA
+        # caching from the previous step; this thin child build just adds two files.
+        run: |
+          docker build \
+            --build-arg BASE_IMAGE=local/pr-agent:github_app \
+            -f deploy/Dockerfile.status \
+            -t ghcr.io/zuescho/pr-agent:tmp \
+            .
+
+      - name: Tag and push status image
+        # metadata-action produced the tag list (latest/sha-*/vX.Y.Z). Re-tag the
+        # built image with each and push. Skips empty tag lines.
+        run: |
+          IFS=$'\n' read -d '' -ra TAGS <<< "$TAGS_OUT"
+          for tag in "${TAGS[@]}"; do
+            [ -z "$tag" ] && continue
+            docker tag ghcr.io/zuescho/pr-agent:tmp "$tag"
+            echo "::group::Pushing $tag"
+            docker push "$tag"
+            echo "::endgroup::"
+          done
+          docker rmi ghcr.io/zuescho/pr-agent:tmp 2>/dev/null || true
+        env:
+          TAGS_OUT: ${{ steps.meta.outputs.tags }}

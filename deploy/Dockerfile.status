@@ -8,10 +8,17 @@
 #
 # The status module + shim are baked into the image. Secrets still come from the
 # runtime volume mount at /app/pr_agent/settings_prod/.secrets.toml.
-
-# NOTE: requires local/pr-agent:github_app to exist. Build it first (see above).
-# A "pull access denied for local/pr-agent" error means you skipped that step.
-FROM local/pr-agent:github_app
+#
+# BASE_IMAGE lets CI swap in a registry-pushed base (ghcr.io/...) without changing
+# the local build path. Defaults to local/pr-agent:github_app so the documented
+# two-step local build in the README works unchanged. To build the base in the
+# same `docker build` invocation (one command, no local pre-build), pass
+# --build-arg BASE_IMAGE and point it at the base image you just built/pushed.
+#
+# A "pull access denied for local/pr-agent" error means you skipped the base build
+# (or, in CI, that BASE_IMAGE points at an image not present in the daemon).
+ARG BASE_IMAGE=local/pr-agent:github_app
+FROM ${BASE_IMAGE}
 
 # status_page.py and status_app.py already live under pr_agent/ in the build
 # context, so the base image's ADD pr_agent pr_agent already includes them if
