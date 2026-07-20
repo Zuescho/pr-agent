@@ -149,12 +149,24 @@ def _status_payload():
         return {"error": s["_error"], "uptime_seconds": int(time.time() - _PROCESS_START)}
     entries = list(LOG_BUFFER)
     log_lines = [line for _, line in entries]
+    _oai_base = _g(s, "openai", "api_base")
+    _oll_base = _g(s, "ollama", "api_base")
+    _model = _g(s, "config", "model", "") or ""
+    # litellm routes by the model prefix; the api_base that actually gets used
+    # follows litellm's init order (OLLAMA.api_base overwrites OPENAI.api_base at
+    # litellm_ai_handler.py L170, so Ollama wins when both are set). Derive the
+    # provider from the prefix (the routing signal) and the endpoint from the
+    # ollama-wins order, and flag the both-sections-filled hazard so /status is
+    # an honest diagnostic rather than a misleading one.
+    _provider_from_prefix = _model.split("/", 1)[0] if "/" in _model else ""
     return {
         "status": "ok",
         "bot": _try_app_slug(s) or "not configured",
         "model": _g(s, "config", "model", "unknown"),
         "fallback_models": list(_g(s, "config", "fallback_models", []) or []),
-        "ollama_api_base": _g(s, "ollama", "api_base", "not set"),
+        "llm_provider": _provider_from_prefix or "none",
+        "llm_api_base": _oll_base or _oai_base or "not set",
+        "provider_mismatch": bool(_oai_base and _oll_base),
         "ai_timeout_seconds": _g(s, "config", "ai_timeout", 0),
         "webhook_path": "/api/v1/github_webhooks",
         "deployment_type": _g(s, "github", "deployment_type", "unknown"),
@@ -193,7 +205,7 @@ _STATUS_HTML = """<!doctype html>
   <tr><td>Bot identity</td><td id="bot"></td></tr>
   <tr><td>LLM model</td><td id="model"></td></tr>
   <tr><td>Fallback models</td><td id="fallback"></td></tr>
-  <tr><td>Ollama endpoint</td><td id="ollama"></td></tr>
+  <tr><td>LLM endpoint</td><td id="llm"></td></tr>
   <tr><td>AI call timeout</td><td id="timeout"></td></tr>
   <tr><td>Webhook endpoint</td><td id="webhook"></td></tr>
   <tr><td>Uptime</td><td id="uptime"></td></tr>
@@ -220,7 +232,7 @@ async function refresh(){
     document.getElementById('bot').textContent = d.bot;
     document.getElementById('model').textContent = d.model;
     document.getElementById('fallback').textContent = (d.fallback_models||[]).join(' ');
-    document.getElementById('ollama').textContent = d.ollama_api_base;
+    document.getElementById('llm').textContent = (d.llm_provider ? '[' + d.llm_provider + '] ' : '') + d.llm_api_base + (d.provider_mismatch ? '  ⚠ BOTH [openai] and [ollama] api_base are set — Ollama wins; comment out the section for the provider you are NOT using' : '');
     document.getElementById('timeout').textContent = d.ai_timeout_seconds + 's';
     document.getElementById('webhook').textContent = 'POST ' + d.webhook_path;
     document.getElementById('uptime').textContent = fmtDur(d.uptime_seconds);

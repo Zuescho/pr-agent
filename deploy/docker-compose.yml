@@ -29,13 +29,25 @@ services:
     ports:
       - "3000:3000"          # webhook receiver. Put behind your reverse proxy / tunnel.
     environment:
-      # --- LLM model (Ollama Cloud) ---
-      # `ollama/` prefix routes through litellm's Ollama provider, which uses
-      # OLLAMA.API_BASE + OLLAMA.API_KEY from .secrets.toml.
-      # Primary: kimi-k2.7-code (coding-focused, lower thinking-token cost).
+      # --- LLM backend (choose ONE provider via the model prefix) ---
+      # pr-agent routes by the prefix on CONFIG__MODEL:
+      #   ollama/<model>  → Ollama provider, uses [ollama] in .secrets.toml
+      #   openai/<model>  → OpenAI provider, uses [openai] in .secrets.toml
+      # Fill in ONLY the matching provider section in .secrets.toml; if both
+      # [ollama] and [openai] set an api_base, Ollama silently wins (litellm
+      # overwrites OPENAI.api_base with OLLAMA.api_base — see
+      # pr_agent/algo/ai_handlers/litellm_ai_handler.py L150 vs L170).
+      #
+      # Default: Ollama Cloud. Primary: kimi-k2.7-code (coding-focused).
       # Fallback: deepseek-v4-flash (fast 1M-context MoE).
+      # To use Neuralwatt instead: comment out the two ollama/* lines below,
+      # uncomment the openai/* pair, fill [openai] in .secrets.toml with
+      # api_base="https://api.neuralwatt.com/v1" + your sk- key, and rebuild is
+      # NOT needed (env-var swap only). Model ids: https://api.neuralwatt.com/v1/models
       CONFIG__MODEL: "ollama/kimi-k2.7-code"
+      # CONFIG__MODEL: "openai/kimi-k2.7-code"
       CONFIG__FALLBACK_MODELS: '["ollama/deepseek-v4-flash"]'
+      # CONFIG__FALLBACK_MODELS: '["openai/glm-5.2-fast"]'
       CONFIG__CUSTOM_MODEL_MAX_TOKENS: "128000"
       CONFIG__AI_TIMEOUT: "300"
       CONFIG__LARGE_PATCH_POLICY: "clip"
