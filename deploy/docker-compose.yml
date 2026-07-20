@@ -1,0 +1,74 @@
+# Unraid / Docker Compose for self-hosted pr-agent (GitHub App mode).
+#
+# Build the image once:
+#   docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
+#
+# Then add the status page (thin layer on top, no upstream edits):
+#   docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
+#
+# Then on Unraid either:
+#   - install the "Docker Compose Manager" plugin and point it at this file, or
+#   - use the Add Container UI with the values mapped below (see SETUP.md).
+#
+# SECRETS: mount the filled-in secrets file read-only at the settings_prod path.
+#   /app/pr_agent/settings_prod/.secrets.toml  (from secrets.example.toml, filled in)
+# It lives under /mnt/user/appdata/pr-agent/ on Unraid.
+#
+# CONFIG OVERRIDES: pr-agent loads settings_prod/.secrets.toml but NOT a
+# settings_prod/configuration.toml, so non-secret config is supplied via env
+# vars (dynaconf env_loader is active and env wins over file defaults). The
+# double-underscore separator maps to dotted keys, e.g. CONFIG__MODEL == config.model.
+
+services:
+  pr-agent:
+    # Use the -status image (base github_app + the /status page). If you don't
+    # want the status page, swap to local/pr-agent:github_app.
+    image: local/pr-agent:github_app-status
+    container_name: pr-agent
+    restart: unless-stopped
+    ports:
+      - "3000:3000"          # webhook receiver. Put behind your reverse proxy / tunnel.
+    environment:
+      # --- LLM model (Ollama Cloud) ---
+      # `ollama/` prefix routes through litellm's Ollama provider, which uses
+      # OLLAMA.API_BASE + OLLAMA.API_KEY from .secrets.toml.
+      # Primary: kimi-k2.7-code (coding-focused, lower thinking-token cost).
+      # Fallback: deepseek-v4-flash (fast 1M-context MoE).
+      CONFIG__MODEL: "ollama/kimi-k2.7-code"
+      CONFIG__FALLBACK_MODELS: '["ollama/deepseek-v4-flash"]'
+      CONFIG__CUSTOM_MODEL_MAX_TOKENS: "128000"
+      CONFIG__AI_TIMEOUT: "300"
+      CONFIG__LARGE_PATCH_POLICY: "clip"
+      CONFIG__MAX_MODEL_TOKENS: "128000"
+      CONFIG__RESPONSE_LANGUAGE: "en-US"
+      CONFIG__REPO_CONTEXT_FILES: "[]"
+
+      # --- Auto-run tools on each PR ---
+      GITHUB_APP__HANDLE_PR_ACTIONS: '["opened","reopened","ready_for_review","synchronize"]'
+      GITHUB_APP__PR_COMMANDS: '["/describe --pr_description.final_update_message=false","/review","/improve"]'
+      GITHUB_APP__HANDLE_PUSH_TRIGGER: "true"
+      GITHUB_APP__PUSH_COMMANDS: '["/describe --pr_description.final_update_message=false","/review"]'
+
+      # --- Review tuning ---
+      PR_REVIEWER__REQUIRE_TESTS_REVIEW: "false"
+      PR_REVIEWER__REQUIRE_SECURITY_REVIEW: "true"
+      PR_REVIEWER__NUM_MAX_FINDINGS: "5"
+      PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD: "7"
+      PR_CODE_SUGGESTIONS__NUM_CODE_SUGGESTIONS_PER_CHUNK: "3"
+
+      # --- Server ---
+      # 1 worker so the /status page's in-memory log buffer sees ALL webhook
+      # activity. The webhook acks in milliseconds and reviews run as background
+      # tasks, so a single worker handles concurrent reviews fine for a personal
+      # bot. Raise only if you review many PRs simultaneously (and accept that
+      # /status will show only one worker's logs).
+      GUNICORN_WORKERS: "1"
+      CONFIG__LOG_LEVEL: "INFO"
+    volumes:
+      - /mnt/user/appdata/pr-agent/.secrets.toml:/app/pr_agent/settings_prod/.secrets.toml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

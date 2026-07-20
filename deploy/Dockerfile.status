@@ -1,0 +1,27 @@
+# Thin child image that adds the status page on top of the upstream github_app
+# image, without touching any upstream file.
+#
+# Build the base first (from the repo root):
+#   docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
+# Then this:
+#   docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
+#
+# The status module + shim are baked into the image. Secrets still come from the
+# runtime volume mount at /app/pr_agent/settings_prod/.secrets.toml.
+
+FROM local/pr-agent:github_app
+
+# status_page.py and status_app.py already live under pr_agent/ in the build
+# context, so the base image's ADD pr_agent pr_agent already includes them if
+# you rebuilt the base. If you did NOT rebuild the base, copy just these two
+# files in:
+COPY pr_agent/status_page.py /app/pr_agent/status_page.py
+COPY pr_agent/status_app.py  /app/pr_agent/status_app.py
+
+# Override the CMD to serve via the shim that mounts the status router.
+# Same gunicorn/uvicorn config as upstream, just a different app module path.
+# --forwarded-allow-ips is scoped to private CIDRs (the tunnel/reverse proxy
+# sits in 10.x/172.16.x/127.x) rather than upstream's "*": the webhook port is
+# reachable via a public tunnel, so trusting X-Forwarded-* from any client
+# would let a spoofed header force https scheme assumptions or bypass IP logic.
+CMD ["python", "-m", "gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-c", "pr_agent/servers/gunicorn_config.py", "--forwarded-allow-ips", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1", "pr_agent.status_app:app"]

@@ -1,259 +1,350 @@
+# pr-agent — self-hosted AI PR reviewer on Unraid (Ollama Cloud + GitHub App)
 
+A self-hosted fork of [`the-pr-agent/pr-agent`](https://github.com/the-pr-agent/pr-agent) that reviews pull requests on your GitHub repos and posts comments back as a **distinct bot identity** (`<your-app>[bot]`), powered by **Ollama Cloud** LLMs, running in Docker on Unraid.
 
-<br />
-
-<div align="center">
-
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://codium.ai/images/pr_agent/logo-dark.png" width="330">
-  <source media="(prefers-color-scheme: light)" srcset="https://codium.ai/images/pr_agent/logo-light.png" width="330">
-  <img src="https://codium.ai/images/pr_agent/logo-light.png" alt="logo" width="330">
-
-</picture>
-<br>
-The Original Open-Source PR Reviewer
-<br><br>
-<a href="https://github.com/the-pr-agent/pr-agent/commits/main">
-<img alt="GitHub" src="https://img.shields.io/github/last-commit/the-pr-agent/pr-agent/main?style=for-the-badge" height="20">
-</a>
-</div>
+This README is the single source of truth: what it is, how to deploy it, and every setting you can configure.
 
 ---
 
- This repository contains the open-source PR Agent Project. 
- It is not the Qodo free tier.
- 
-PR-Agent is an open-source, AI-powered code review agent and a community-maintained legacy project of Qodo. It is distinct from Qodo’s primary AI code review offering, which provides a feature-rich, context-aware experience. Qodo now offers a free tier that integrates seamlessly with GitHub, GitLab, Bitbucket, and Azure DevOps for high-quality automated reviews.
+## What you get
 
+- **Distinct bot identity** — reviews post as `<your-app-name>[bot]`, not `github-actions[bot]`. One GitHub App install covers every repo you add it to.
+- **No GitHub Actions runner spin-up, no GitHub-side review timeout** — the webhook receiver acks GitHub in milliseconds and runs the LLM call on a background task. A slow model taking 2-3 minutes per PR is a non-issue.
+- **Ollama Cloud backend** — pick any current Ollama Cloud model via one env var (`kimi-k2.7-code`, `deepseek-v4-flash`, `glm-5.2`, `qwen3.5:122b`, …). Native support, no patches.
+- **Status page** — `/status` (HTML, auto-refreshing) and `/status.json` showing bot identity, configured model, in-flight reviews, and a live log tail.
+- **Unraid container template** — install via the Unraid "Add Container" GUI with a labeled form for every setting (LLM picker, tool toggles, review tuning). No YAML editing required.
+- **Tools** — auto-runs `/describe` (AI PR description), `/review` (inline code review), `/improve` (committable code suggestions) on every PR; re-runs `/review` on new commits. Also available on-demand via PR comments: `/review`, `/improve`, `/describe`, `/ask <question>`, `/update_changelog`, `/add_docs`, `/analyze`.
 
-## Sponsors
+## How it works
 
-PR-Agent is a community-maintained open-source project, with its ongoing development supported by our sponsors. If you'd like to support the project, consider [becoming a sponsor](https://github.com/sponsors/naorpeled).
-
-<p align="center">
-  <h3 align="center">🥇 Gold Sponsor</h3>
-</p>
-
-<p align="center">
-  <a target="_blank" href="https://www.qodo.ai/">
-    <img alt="Qodo — Gold sponsor" src="https://www.qodo.ai/wp-content/uploads/2025/03/qodo-logo.svg" width="300">
-  </a>
-</p>
-
-<p align="center">
-  <a target="_blank" href="https://www.qodo.ai/get-started/">Try the free version of Qodo</a>
-</p>
-
-
-## Table of Contents
-
-- [Getting Started](#getting-started)
-- [Why Use PR-Agent?](#why-use-pr-agent)
-- [Features](#features)
-- [See It in Action](#see-it-in-action)
-- [How It Works](#how-it-works)
-- [Data Privacy](#data-privacy)
-- [Contributing](#contributing)
-
-## Getting Started
-
-> [!NOTE]
-> **Docker Hub namespace migration.** Releases `0.34.2` and later are published under [`pragent/pr-agent`](https://hub.docker.com/r/pragent/pr-agent). Older releases (up to and including `v0.31`) remain available at the legacy [`codiumai/pr-agent`](https://hub.docker.com/r/codiumai/pr-agent) namespace as a frozen archive — no new images are pushed there. Update any pinned `image:` / `docker pull` / `uses: docker://` references when upgrading to `0.34.2+`.
-
-### 🚀 Quick Start for PR-Agent
-
-#### 1. GitHub Action (Recommended)
-
-Add automated PR reviews to your repository with a simple workflow file:
-
-```yaml
-# .github/workflows/pr-agent.yml
-name: PR Agent
-on:
-  pull_request:
-    types: [opened, synchronize]
-jobs:
-  pr_agent_job:
-    runs-on: ubuntu-latest
-    steps:
-    - name: PR Agent action step
-      uses: the-pr-agent/pr-agent@main
-      env:
-        OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
-[Full GitHub Action setup guide](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)
+GitHub PR event ──webhook──▶  your tunnel (Cloudflare/Tailscale)  ──▶  Docker container (Unraid)
+                                         POST /api/v1/github_webhooks
+                                              │  verify HMAC signature
+                                              │  ack 200 immediately
+                                              ▼
+                                    background task per tool:
+                                      /describe, /review, /improve
+                                              │
+                                              ▼
+                                    Ollama Cloud (https://ollama.com/api/chat)
+                                              │
+                                              ▼
+                                    post review as <your-app>[bot]
+```
 
-#### 2. CLI Usage (Local Development)
+---
 
-Run PR-Agent locally on your repository:
+## Files in this fork (added on top of upstream pr-agent)
+
+| File | Purpose |
+|---|---|
+| `README.md` | This file — complete deployment + settings reference |
+| `secrets.example.toml` | Template for `.secrets.toml` (Ollama key + GitHub App credentials) |
+| `templates/pr-agent.xml` | Unraid container template — GUI form for every setting |
+| `deploy/docker-compose.yml` | Docker Compose file (env-var config, secrets mount, healthcheck) |
+| `deploy/Dockerfile.status` | Thin child image that layers the `/status` page on the base |
+| `pr_agent/status_page.py` | Status page router + loguru in-memory sink + HTML/JSON endpoints |
+| `pr_agent/status_app.py` | Entrypoint shim: imports upstream app, mounts status router, **enforces webhook-secret guard at boot** |
+
+No upstream files are modified — all overrides are via env vars + a child Docker image. This keeps pr-agent updates painless: `git pull` + rebuild.
+
+---
+
+## Deployment guide
+
+### 1. Create the GitHub App
+
+Go to <https://github.com/settings/apps> → **New GitHub App** (or under an org).
+
+| Field | Value |
+|---|---|
+| GitHub App name | `pr-agent` (or whatever you want the bot to be called) |
+| Homepage URL | anything (your repo URL is fine) |
+| Webhook → Active | ✅ checked |
+| Webhook URL | `https://<YOUR-TUNNEL-HOST>/api/v1/github_webhooks` (set up in step 4) |
+| Webhook secret | a random hex string — generate with `python -c "import secrets; print(secrets.token_hex(20))"` and **save it** |
+| Repository permissions | **Pull requests: Read & write**, **Issue comment: Read & write**, **Contents: Read-only**, **Metadata: Read-only** |
+| Subscribe to events | **Pull request**, **Issue comment** |
+
+Create the app, then:
+1. On the app's settings page, click **Generate a private key** → a `.pem` file downloads.
+2. Note the **App ID** (numeric, near the top of the settings page).
+
+> ⚠️ **The webhook secret is mandatory.** The container refuses to start if it's missing or still set to the placeholder — this prevents the webhook endpoint from silently accepting unauthenticated requests (see Security below).
+
+### 2. Build the Docker images on Unraid
+
+On the Unraid host (web terminal or SSH), from this repo's root:
+
 ```bash
-pip install pr-agent
-export OPENAI_KEY=your_key_here
-pr-agent --pr_url https://github.com/owner/repo/pull/123 review
+# 1. Base image (the github_app target from the upstream Dockerfile):
+docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
+
+# 2. Status-page layer (thin child image, no upstream files edited):
+docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
 ```
-[Complete CLI setup guide](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)
 
-#### 3. Other Platforms
+The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the `/status` web page on top. The compose file and Unraid template default to `local/pr-agent:github_app-status`. If you don't want the status page, swap the image tag to `local/pr-agent:github_app`.
 
-- [GitLab webhook setup](https://docs.pr-agent.ai/installation/gitlab/)
-- [BitBucket app installation](https://docs.pr-agent.ai/installation/bitbucket/)
-- [Azure DevOps setup](https://docs.pr-agent.ai/installation/azure/)
+### 3. Create the secrets file on Unraid
 
-[//]: # (## News and Updates)
+```bash
+mkdir -p /mnt/user/appdata/pr-agent
+```
 
-[//]: # ()
-[//]: # (## Aug 8, 2025)
+Create `/mnt/user/appdata/pr-agent/.secrets.toml` by copying `secrets.example.toml` from this repo and filling in:
 
-[//]: # ()
-[//]: # ()
-[//]: # ()
-[//]: # (## Jul 1, 2025)
+```toml
+[ollama]
+api_base = "https://ollama.com"
+api_key = "<your Ollama Cloud key from https://ollama.com/settings/keys>"
 
-[//]: # (You can now receive automatic feedback from Qodo Merge in your local IDE after each commit. Read more about it [here]&#40;https://github.com/qodo-ai/agents/tree/main/agents/qodo-merge-post-commit&#41;.)
+[github]
+deployment_type = "app"
+app_id = <your App ID, numeric>
+webhook_secret = "<the webhook secret you generated in step 1>"
+private_key = """\
+-----BEGIN RSA PRIVATE KEY-----
+<paste the entire contents of the .pem file you downloaded>
+-----END RSA PRIVATE KEY-----
+"""
+```
 
-[//]: # ()
-[//]: # ()
-[//]: # (## Jun 21, 2025)
+**Config overrides (model, tools, tuning) are NOT in this file** — they're environment variables in the compose file / Unraid template. See the Settings reference below. The `.secrets.toml` holds only credentials.
 
-[//]: # ()
-[//]: # (v0.30 was [released]&#40;https://github.com/the-pr-agent/pr-agent/releases&#41;)
+### 4. Expose the webhook endpoint
 
-[//]: # ()
-[//]: # ()
-[//]: # (## Apr 30, 2025)
+The container listens on port 3000 for `POST /api/v1/github_webhooks`. Unraid is behind your router's NAT, so pick one:
 
-[//]: # ()
-[//]: # (A new feature is now available in the `/improve` tool for Qodo Merge 💎 - Chat on code suggestions.)
+- **Cloudflare Tunnel** (recommended, free): `cloudflared tunnel` maps a public hostname to `http://<unraid-ip>:3000`. No port forwarding, no cert management.
+- **Tailscale Funnel**: if you already run Tailscale on Unraid, `tailscale funnel` exposes a port publicly.
+- **Port forward + reverse proxy**: forward 443 to Unraid, run Caddy/Traefik with Let's Encrypt in front of the container.
 
-[//]: # ()
-[//]: # (<img width="512" alt="image" src="https://codium.ai/images/pr_agent/improve_chat_on_code_suggestions_ask.png" />)
+The public URL goes into the GitHub App's **Webhook URL** field (step 1). The path must be `/api/v1/github_webhooks`.
 
-[//]: # ()
-[//]: # (Read more about it [here]&#40;https://docs.pr-agent.ai/tools/improve/#chat-on-code-suggestions&#41;.)
+The same host also serves the status page at `/status` (HTML, auto-refreshing) and `/status.json` (machine-readable). **Guard it** — see Security below.
 
-[//]: # ()
-[//]: # ()
+### 5. Start the container
 
-## Why Use PR-Agent?
+#### Option A — Unraid container template (recommended)
 
-### 🎯 Built for Real Development Teams
+`templates/pr-agent.xml` turns every config knob into a labeled GUI field.
 
-**Fast & Affordable**: Each tool (`/review`, `/improve`, `/ask`) uses a single LLM call (~30 seconds, low cost)
+1. Copy `templates/pr-agent.xml` to your Unraid host at `/boot/config/plugins/dockerMan/templates-user/pr-agent.xml` (create the `templates-user` directory if it doesn't exist).
+2. In the Unraid web UI → **Docker** tab → **Add Container** → pick **pr-agent** from the template dropdown.
+3. Fill in the visible fields (see Settings reference for each):
+   - **LLM model** — the model that reviews your PRs. The field description lists every current Ollama Cloud model with a one-line characterization and a link to the live catalog. Default: `ollama/kimi-k2.7-code`.
+   - **Fallback LLM model(s)** — tried if the primary errors.
+   - **Secrets file** — path to your filled-in `.secrets.toml` (default `/mnt/user/appdata/pr-agent/.secrets.toml`).
+   - **Webhook port** — `3000` (behind your tunnel).
+4. Click **Advanced View** for the tuning knobs (model max tokens, AI timeout, large-patch policy, response language, auto-review triggers, which tools run, review strictness, `/improve` score threshold, gunicorn workers, log level). Every field has a description.
+5. **Apply**. The container starts within ~15s.
 
-**Handles Any PR Size**: Our [PR Compression strategy](https://docs.pr-agent.ai/core-abilities/#pr-compression-strategy) effectively processes both small and large PRs
+To change the LLM later: edit the container in the Unraid Docker UI, change the **LLM model** field, apply. No YAML editing, no rebuild — it's an env-var swap.
 
-**Highly Customizable**: JSON-based prompting allows easy customization of review categories and behavior via [configuration files](pr_agent/settings/configuration.toml)
+#### Option B — Docker Compose Manager plugin
 
-**Platform Agnostic**: 
-- **Git Providers**: GitHub, GitLab, BitBucket, Azure DevOps, Gitea
-- **Deployment**: CLI, GitHub Actions, Docker, self-hosted, webhooks
-- **AI Models**: OpenAI GPT, Claude, Deepseek, and more
+Install the **Docker Compose Manager** plugin in Unraid, then add `deploy/docker-compose.yml` as a new compose project. Same settings as the template, just in YAML. Adjust the volume path if your appdata lives elsewhere. Start it.
 
-**Open Source Benefits**:
-- Full control over your data and infrastructure
-- Customize prompts and behavior for your team's needs
-- No vendor lock-in
-- Community-driven development
+### 6. Verify the webhook is reachable
 
-## Features
+From outside your network:
 
-<div style="text-align:left;">
+```bash
+curl -s https://<YOUR-TUNNEL-HOST>/
+# → {"status":"ok"}
 
-PR-Agent offers comprehensive pull request functionalities integrated with various git providers:
+# Status page (in-flight reviews + recent log, in-browser):
+# open https://<YOUR-TUNNEL-HOST>/status
 
-|                                                         |                                                                                        | GitHub | GitLab | Bitbucket | Azure DevOps | Gitea |
-|---------------------------------------------------------|----------------------------------------------------------------------------------------|:------:|:------:|:---------:|:------------:|:-----:|
-| [TOOLS](https://docs.pr-agent.ai/tools/)         | [Describe](https://docs.pr-agent.ai/tools/describe/)                            |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Review](https://docs.pr-agent.ai/tools/review/)                                |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Improve](https://docs.pr-agent.ai/tools/improve/)                              |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Ask](https://docs.pr-agent.ai/tools/ask/)                                      |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | ⮑ [Ask on code lines](https://docs.pr-agent.ai/tools/ask/#ask-lines)            |   ✅   |   ✅   |           |              |       |
-|                                                         | [Help Docs](https://docs.pr-agent.ai/tools/help_docs/?h=auto#auto-approval)     |   ✅   |   ✅   |    ✅     |              |       |
-|                                                         | [Update CHANGELOG](https://docs.pr-agent.ai/tools/update_changelog/)            |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         |                                                                                                                     |        |        |           |              |       |
-| [USAGE](https://docs.pr-agent.ai/usage-guide/)   | [CLI](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)                            |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [App / webhook](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#github-app)                      |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Tagging bot](https://github.com/the-pr-agent/pr-agent#try-it-now)                                                     |   ✅   |        |           |              |       |
-|                                                         | [Actions](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)                              |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         |                                                                                                                     |        |        |           |              |       |
-| [CORE](https://docs.pr-agent.ai/core-abilities/) | [Adaptive and token-aware file patch fitting](https://docs.pr-agent.ai/core-abilities/compression_strategy/) |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Dynamic context](https://docs.pr-agent.ai/core-abilities/dynamic_context/)                                  |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Fetching ticket context](https://docs.pr-agent.ai/core-abilities/fetching_ticket_context/)                  |   ✅    |  ✅    |     ✅     |              |       |
-|                                                         | [Interactivity](https://docs.pr-agent.ai/core-abilities/interactivity/)                                      |   ✅   |  ✅   |           |              |       |
-|                                                         | [Local and global metadata](https://docs.pr-agent.ai/core-abilities/metadata/)                               |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Multiple models support](https://docs.pr-agent.ai/usage-guide/changing_a_model/)                            |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [PR compression](https://docs.pr-agent.ai/core-abilities/compression_strategy/)                              |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Self reflection](https://docs.pr-agent.ai/core-abilities/self_reflection/)                                  |   ✅   |   ✅   |    ✅     |      ✅      |       |
+# Or machine-readable:
+curl -s https://<YOUR-TUNNEL-HOST>/status.json | python -m json.tool
+```
 
-[//]: # (- Support for additional git providers is described in [here]&#40;./docs/Full_environments.md&#41;)
-___
+Then in your GitHub App settings, scroll to **Recent Deliveries**. After step 7 you'll see webhook events with their HTTP responses. GitHub retries failed deliveries for up to 3 days, so a transient tunnel blip won't lose reviews.
 
-## See It in Action
+### 7. Install the App on your repos
 
-</div>
-<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/530">/describe</a></h4>
-<div align="center">
-<p float="center">
-<img src="https://www.codium.ai/images/pr_agent/describe_new_short_main.png" width="512">
-</p>
-</div>
-<hr>
+Back in the GitHub App settings → **Install App** → choose the repos you want reviewed. From now on, opening a PR on any of them triggers:
 
-<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099151">/review</a></h4>
-<div align="center">
-<p float="center">
-<kbd>
-<img src="https://www.codium.ai/images/pr_agent/review_new_short_main.png" width="512">
-</kbd>
-</p>
-</div>
-<hr>
+1. GitHub POSTs the `pull_request` event to your tunnel URL.
+2. The container validates the `X-Hub-Signature-256` HMAC with your webhook secret.
+3. It acks `200` immediately and queues `/describe`, `/review`, `/improve` on a background task.
+4. Each tool calls Ollama Cloud, posts its comment as `<your-app>[bot]`.
 
-<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099159">/improve</a></h4>
-<div align="center">
-<p float="center">
-<kbd>
-<img src="https://www.codium.ai/images/pr_agent/improve_new_short_main.png" width="512">
-</kbd>
-</p>
-</div>
+Comment `/review`, `/improve`, `/describe`, or `/ask <question>` on any PR to re-trigger a tool on demand.
 
-<hr>
+### 8. Sanity-check commands
 
-## How It Works
+```bash
+# Container logs (live)
+docker logs -f pr-agent
 
-The following diagram illustrates PR-Agent tools and their flow:
+# Status page (in-flight reviews + recent log, in-browser):
+# open https://<YOUR-TUNNEL-HOST>/status
 
-![PR-Agent Tools](https://www.qodo.ai/images/pr_agent/diagram-v0.9.png)
+# Confirm the App authenticates (from inside the container)
+docker exec -it pr-agent python -c "from pr_agent.config_loader import get_settings; print('app_id:', get_settings().github.app_id, 'model:', get_settings().config.model)"
 
-## Data Privacy
+# Local CLI smoke test against a real PR (uses your mounted .secrets.toml)
+docker exec -it pr-agent python pr_agent/cli.py --pr_url https://github.com/<you>/<repo>/pull/<N> review
+```
 
-### Self-hosted PR-Agent
+---
 
-- If you host PR-Agent with your OpenAI API key, it is between you and OpenAI. You can read their API data privacy policy here:
-https://openai.com/enterprise-privacy
+## Settings reference
 
-## Contributing
+All non-secret config is via **environment variables** (double-underscore separator: `CONFIG__MODEL` == `config.model`). Env vars win over the upstream defaults baked into `pr_agent/settings/configuration.toml`. Set them in the Unraid template GUI or the compose `environment:` block.
 
-To contribute to the project, get started by reading our [Contributing Guide](https://github.com/the-pr-agent/pr-agent/blob/b09eec265ef7d36c232063f76553efb6b53979ff/CONTRIBUTING.md).
+### LLM backend
 
+| Env var | Default | Description |
+|---|---|---|
+| `CONFIG__MODEL` | `ollama/kimi-k2.7-code` | The Ollama Cloud model that reviews PRs. Prefix with `ollama/` so pr-agent routes through litellm's Ollama provider using your `OLLAMA_API_KEY`. See "LLM model picker" below for the full list. |
+| `CONFIG__FALLBACK_MODELS` | `["ollama/deepseek-v4-flash"]` | JSON array of models tried if the primary errors or rate-limits. Same `ollama/` prefix. |
+| `CONFIG__CUSTOM_MODEL_MAX_TOKENS` | `128000` | Max input tokens the model accepts. Lower if you pick a smaller-context model. Lets pr-agent's PR-compression fit large PRs in one call. |
+| `CONFIG__AI_TIMEOUT` | `300` | Per-LLM-call timeout in seconds. The webhook acks GitHub in milliseconds and runs the review on a background task, so this can be generous without hitting GitHub's ~10s webhook timeout. |
+| `CONFIG__MAX_MODEL_TOKENS` | `128000` | Hard cap on tokens usable by any model. Keep aligned with `CUSTOM_MODEL_MAX_TOKENS`. |
+| `CONFIG__LARGE_PATCH_POLICY` | `clip` | What to do when a PR diff exceeds the token budget. `clip` = review the first portion (always produces some review); `skip` = skip the PR entirely. |
+| `CONFIG__RESPONSE_LANGUAGE` | `en-US` | ISO 3166 + ISO 639 locale for review comments. `en-US`, `de-DE`, `fr-FR`, `zh-CN`, etc. Change to `de-DE` for German reviews. |
+| `CONFIG__REPO_CONTEXT_FILES` | `[]` | JSON array of repo-relative files (e.g. `AGENTS.md`, `CLAUDE.md`) to inject into review prompts. `[]` = none — keeps reviews focused on the diff. |
 
-## Big News for PR-Agent
+### Auto-run tools on each PR
 
-PR-Agent has a new home!
+| Env var | Default | Description |
+|---|---|---|
+| `GITHUB_APP__HANDLE_PR_ACTIONS` | `["opened","reopened","ready_for_review","synchronize"]` | JSON array of `pull_request` actions that trigger auto-review. Remove `synchronize` if you don't want re-reviews on every push. |
+| `GITHUB_APP__PR_COMMANDS` | `["/describe --pr_description.final_update_message=false","/review","/improve"]` | JSON array of pr-agent commands run automatically on each new PR. Remove any you don't want. Available: `/describe`, `/review`, `/improve`, `/ask`, `/update_changelog`, `/add_docs`, `/analyze`. |
+| `GITHUB_APP__HANDLE_PUSH_TRIGGER` | `true` | When `true`, re-run commands on new commits to an open PR (`synchronize` action). |
+| `GITHUB_APP__PUSH_COMMANDS` | `["/describe --pr_description.final_update_message=false","/review"]` | JSON array of commands run on `synchronize`. Defaults to `/describe` + `/review` (skips `/improve` to save cost on every push). |
 
-After years of building this tool alongside the community, Qodo has donated PR-Agent to the open-source community - and we couldn't be more excited about what comes next.
+### Review tuning
 
-The project now lives in the PR-Agent org on GitHub, is fully community-owned, and is open for contributions and additional maintainers.
+| Env var | Default | Description |
+|---|---|---|
+| `PR_REVIEWER__REQUIRE_TESTS_REVIEW` | `false` | When `true`, the reviewer flags missing tests for new behavior. Noisy on pure source changes, so off by default. Toggle on for repos where test coverage matters. |
+| `PR_REVIEWER__REQUIRE_SECURITY_REVIEW` | `true` | Run the security sub-review (injection, auth gaps, secret leakage, etc.). Recommended on. |
+| `PR_REVIEWER__NUM_MAX_FINDINGS` | `5` | Cap on findings reported per review. Lower = less noisy, higher = more thorough. |
+| `PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD` | `7` | 0-10. `/improve` only surfaces suggestions scoring at least this high. `7` = only real problems. Lower (4-5) for more suggestions, raise (8-9) for stricter. |
+| `PR_CODE_SUGGESTIONS__NUM_CODE_SUGGESTIONS_PER_CHUNK` | `3` | Number of code suggestions per diff chunk in `/improve`. Lower = faster, less noisy. |
 
-What else changed: 
-- Docs moved to - www.pr-agent.ai
-- Qodo Merge (Qodo 1.0), the hosted URL, which was the enterprise version of PR-Agent, has been rebranded and evolved into Qodo (Qodo 2.0), a full AI code review platform.
+### Server
 
-## ❤️ Community
+| Env var | Default | Description |
+|---|---|---|
+| `GUNICORN_WORKERS` | `1` | Number of gunicorn worker processes. **Keep at 1** so the `/status` page's in-memory log buffer sees ALL webhook activity (each worker has its own buffer). The webhook acks in milliseconds and reviews run as background tasks, so one worker handles concurrent reviews fine for a personal bot. Raise only if you review many PRs simultaneously (and accept that `/status` will show only one worker's logs). |
+| `CONFIG__LOG_LEVEL` | `INFO` | Log verbosity: `INFO` (normal) or `DEBUG` (verbose, for troubleshooting). |
 
-This open-source release remains here as a community contribution from Qodo — the origin of modern AI-powered code collaboration. We’re proud to share it and inspire developers worldwide.
+### Secrets (in `.secrets.toml`, NOT env vars)
 
-The project now has its first external maintainer, Naor ([@naorpeled](https://github.com/naorpeled)), and is currently in the process of being donated to an open-source foundation.
+The GitHub App private key is multi-line PEM — painful in a single-line env field — so credentials live in the mounted `.secrets.toml`:
+
+| Key | Description |
+|---|---|
+| `[ollama] api_base` | `https://ollama.com` for Ollama Cloud. |
+| `[ollama] api_key` | Your Ollama Cloud key from <https://ollama.com/settings/keys>. |
+| `[github] deployment_type` | `app` (this deployment mode). |
+| `[github] app_id` | Numeric App ID from the GitHub App settings page. |
+| `[github] webhook_secret` | The secret you generated in step 1. **Mandatory** — container refuses to start without it. |
+| `[github] private_key` | The full PEM contents of the `.pem` file you downloaded. |
+
+You can alternatively pass these as env vars (`OLLAMA__API_KEY`, `GITHUB__APP_ID`, `GITHUB__WEBHOOK_SECRET`, `GITHUB__PRIVATE_KEY`) — env wins over the file.
+
+---
+
+## LLM model picker
+
+The `CONFIG__MODEL` field's description in the Unraid template lists every current Ollama Cloud model with a one-line characterization. Verified catalog (2026-07-20):
+
+| Model | Characterization |
+|---|---|
+| `ollama/kimi-k2.7-code` | **Coding-focused agentic, lower thinking-token cost (DEFAULT — best for code review)** |
+| `ollama/deepseek-v4-flash` | Fast 1M-context MoE, good cheap fallback |
+| `ollama/deepseek-v4-pro` | Stronger DeepSeek, three reasoning modes |
+| `ollama/glm-5.2` | Z.ai flagship for long-horizon tasks |
+| `ollama/glm-5.1` | Strong coding, prior flagship |
+| `ollama/kimi-k2.6` | General multimodal agentic |
+| `ollama/kimi-k2.5` | Earlier Kimi, still solid |
+| `ollama/minimax-m3` | 1M context, native multimodality |
+| `ollama/minimax-m2.7` | Coding + agentic workflows |
+| `ollama/qwen3.5:122b` | Largest Qwen 3.5 tag, multimodal |
+| `ollama/qwen3.5:27b` | Mid-size Qwen, faster |
+| `ollama/gemma4:31b` | Frontier at size, reasoning + coding |
+| `ollama/mistral-large-3` | Enterprise general-purpose MoE |
+| `ollama/gpt-oss:120b` | OpenAI open-weight reasoning |
+| `ollama/gemini-3-flash-preview` | Fast frontier, preview |
+| `ollama/nemotron-3-ultra` | NVIDIA, long-running agents |
+| `ollama/nemotron-3-super` | NVIDIA 120B MoE, 12B active |
+
+Verify the live list anytime: <https://ollama.com/search?c=cloud>. Ollama retires older cloud models on a published schedule — if a model 404s, pick another from that page.
+
+**To use a local Ollama daemon instead of Cloud**: set `CONFIG__MODEL` to e.g. `ollama/qwen2.5-coder:32b` and set `[ollama] api_base = "http://host.docker.internal:11434"` (and leave `api_key` empty) in your `.secrets.toml`. The container reaches the host's Ollama via Docker's host bridge.
+
+---
+
+## The `/status` page
+
+| Endpoint | Returns |
+|---|---|
+| `GET /` | `{"status":"ok"}` — healthcheck (used by Docker healthcheck) |
+| `GET /status` | HTML page (auto-refreshing every 5s) |
+| `GET /status.json` | Machine-readable JSON |
+
+Shows: bot identity (App ID), configured model + fallbacks, Ollama endpoint, AI timeout, webhook path, deployment type, uptime, start time, **in-flight reviews** (PR URL + command + age), and the last 80 log lines.
+
+**In-flight detection** is heuristic: it parses recent log lines for pr-agent's `Performing auto command '<cmd>', for api_url='...'` and `Processing comment on PR api_url='...'` markers, and drops entries older than 6 minutes (the LLM call is bounded by `CONFIG__AI_TIMEOUT`, default 300s). It's an operational dashboard, not an authoritative registry.
+
+**What it does NOT show**: diff content, secrets, API keys, the GitHub private key, or the webhook secret. Only repo/PR URLs, model names, and log lines (which pr-agent does not log secrets in).
+
+---
+
+## Security
+
+- **Webhook authentication is enforced at boot.** The container refuses to start if `github.webhook_secret` is missing, empty, or still the placeholder. This closes a real upstream gap: `get_body()` in `pr_agent/servers/github_app.py` only calls `verify_signature()` inside `if webhook_secret:`, so a misconfigured secret would silently leave the endpoint unauthenticated. Fail-fast > silent vuln.
+- **Guard the `/status` page.** It shows repo/PR URLs and the model name — not secrets, but not something you want public. Gate it at the tunnel/reverse-proxy layer: Cloudflare Access, Tailscale ACL, or basic auth on Caddy/Traefik. The page deliberately does no auth of its own (the webhook endpoint must be public, so layering auth only on `/status` would be security theater).
+- **`--forwarded-allow-ips` is scoped to private CIDRs** (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1) in the status image's CMD, not the upstream `*` wildcard. Your tunnel/reverse proxy sits in those ranges; clients can't spoof `X-Forwarded-*` headers.
+- **HMAC signature validation** (`pr_agent/servers/utils.py:verify_signature`) uses `hmac.compare_digest` (constant-time) and raises 403 on missing/mismatched signatures.
+
+---
+
+## Operating notes
+
+- **Cost**: Ollama Cloud bills per token. `kimi-k2.7-code` is optimized for lower thinking-token usage; a typical PR review is well under $0.05. Monitor at <https://ollama.com/settings/keys>.
+- **Model retirements**: Ollama periodically retires cloud models. Check <https://ollama.com/search?c=cloud> and the retirement table in their docs. Update `CONFIG__MODEL` / `CONFIG__FALLBACK_MODELS` when needed.
+- **Restart policy**: the compose file sets `unless-stopped`, so reviews survive Unraid reboots once the Docker service comes back.
+- **Updates**: to pick up upstream pr-agent fixes, `git pull` in this directory and re-run both `docker build` commands from step 2, then restart the container. No patches to reapply — all your customizations are env vars + the child image.
+- **Multiple repos**: one App install covers every repo you add in the Install App tab. No per-repo config needed — each reviewed repo can optionally drop a `.pr_agent.toml` at its root to override tools per-repo.
+- **Forked PRs**: if you accept external contributor PRs, the webhook handler works regardless of PR source (it uses the GitHub API to fetch PR data, not a local checkout).
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / Fix |
+|---|---|
+| Container exits at boot with `FATAL: github.webhook_secret is not configured` | You didn't fill in `webhook_secret` in `.secrets.toml`, or it still says `REPLACE_WITH_WEBHOOK_SECRET`. Set it to the secret you generated in step 1. |
+| `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image). Build the base first. |
+| GitHub App **Recent Deliveries** shows 403 | Wrong webhook secret, or the tunnel isn't forwarding. Re-check the secret matches between the App settings and `.secrets.toml`. |
+| GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an Ollama Cloud auth error (wrong `api_key`) or a retired model (404 from Ollama). Update `api_key` or `CONFIG__MODEL`. |
+| `/status` shows no in-flight reviews even when a review is running | The review may have emitted >80 log lines (large PR) pushing the start marker out of the recent window, OR you're running `GUNICORN_WORKERS>1` and the review is on a different worker. Keep workers at 1. |
+| Reviews post as `github-actions[bot]` not `<your-app>[bot]` | `deployment_type` isn't `app`, or the App isn't installed on the repo. Check `.secrets.toml` has `deployment_type = "app"` and the App is installed via the Install App tab. |
+| `Model not found` errors in logs | The model name is wrong or retired. Verify at <https://ollama.com/search?c=cloud> and update `CONFIG__MODEL`. Remember the `ollama/` prefix. |
+
+---
+
+## Architecture decision notes
+
+**Why self-hosted instead of GitHub Actions?** Three reasons, in order: (1) distinct bot identity requires a GitHub App, which requires a webhook receiver you host; (2) no GitHub-side review timeout — the webhook acks in milliseconds, the LLM call runs on a background task, so slow models are fine; (3) one App install covers all repos, no per-repo workflow + secret.
+
+**Why Ollama Cloud instead of local Ollama?** No GPU box required, any model in the catalog, pay-per-token. To switch to local Ollama later, change `api_base` in `.secrets.toml` and `CONFIG__MODEL` — no code changes.
+
+**Why a child Docker image for the status page instead of editing upstream?** Zero merge debt. `git pull` + rebuild picks up upstream fixes; the status layer is two files copied on top. No patches to reapply.
+
+**Why env vars for config instead of a mounted `configuration.toml`?** pr-agent's `config_loader.py` loads `settings_prod/.secrets.toml` but NOT `settings_prod/configuration.toml` — a config file mounted there is silently ignored. Env vars (dynaconf env_loader) are the supported override path and win over upstream defaults. JSON-array and boolean env vars parse correctly to lists/bools even with `AUTO_CAST_FOR_DYNACONF=false` (verified — dynaconf's `parse_with_toml` handles it).
+
+---
+
+## Credits
+
+This fork builds on [`the-pr-agent/pr-agent`](https://github.com/the-pr-agent/pr-agent) (formerly `Codium-ai/pr-agent`), the open-source AI PR reviewer donated to the community by Qodo. All credit for the review/improve/describe tools, PR compression, and multi-provider LLM support belongs to that project. This fork adds only the Unraid deployment scaffolding, the status page, and the webhook-secret boot guard.

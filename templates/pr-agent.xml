@@ -1,0 +1,163 @@
+<?xml version="1.0"?>
+<Container version="2">
+    <Name>pr-agent</Name>
+    <Repository>local/pr-agent:github_app-status</Repository>
+    <Registry/>
+    <Network>bridge</Network>
+    <Shell>sh</Shell>
+    <Privileged>false</Privileged>
+    <Support>https://github.com/the-pr-agent/pr-agent/issues</Support>
+    <Project>https://github.com/the-pr-agent/pr-agent</Project>
+    <Overview>Self-hosted AI code reviewer (the-pr-agent/pr-agent) running as a GitHub App. Receives pull_request webhooks from GitHub, reviews diffs with an Ollama Cloud LLM, and posts comments back as a distinct bot identity. No GitHub Actions runner spin-up; the webhook acks immediately and the LLM call runs on a background task with no GitHub-side timeout. Includes a /status web page showing bot identity, configured model, in-flight reviews, and a live log tail. Build: (1) docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .  (2) docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .  (run both from the cloned pr-agent repo root on Unraid).</Overview>
+    <Category>Cloud: Productivity:Tools</Category>
+    <WebUI>http://[IP]:[PORT:3000]/status</WebUI>
+    <Icon>https://raw.githubusercontent.com/the-pr-agent/pr-agent/main/docs/assets/pr_agent_logo.png</Icon>
+    <ExtraParams/>
+    <PostArgs/>
+    <CPUset/>
+    <Description>Self-hosted AI PR reviewer powered by Ollama Cloud. Set the LLM model below, point the secrets file at your filled-in .secrets.toml (Ollama API key + GitHub App credentials), and expose port 3000 behind a tunnel (Cloudflare Tunnel / Tailscale Funnel). Visit /status for bot status, in-flight reviews, and a live log tail; /status.json for machine-readable output. See SETUP.md in the repo for the full walkthrough.</Description>
+
+    <Networking>
+        <Mode>bridge</Mode>
+        <Publish>
+            <Port>
+                <HostPort>3000</HostPort>
+                <ContainerPort>3000</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+        </Publish>
+    </Networking>
+
+    <Data>
+        <Volume>
+            <HostDir>/mnt/user/appdata/pr-agent/.secrets.toml</HostDir>
+            <ContainerDir>/app/pr_agent/settings_prod/.secrets.toml</ContainerDir>
+            <Mode>ro</Mode>
+        </Volume>
+    </Data>
+
+    <Environment>
+        <!-- LLM backend (the field users care about most) -->
+        <Variable>
+            <Value>ollama/kimi-k2.7-code</Value>
+            <Name>CONFIG__MODEL</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>["ollama/deepseek-v4-flash"]</Value>
+            <Name>CONFIG__FALLBACK_MODELS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>128000</Value>
+            <Name>CONFIG__CUSTOM_MODEL_MAX_TOKENS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>300</Value>
+            <Name>CONFIG__AI_TIMEOUT</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>128000</Value>
+            <Name>CONFIG__MAX_MODEL_TOKENS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>clip</Value>
+            <Name>CONFIG__LARGE_PATCH_POLICY</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>en-US</Value>
+            <Name>CONFIG__RESPONSE_LANGUAGE</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>[]</Value>
+            <Name>CONFIG__REPO_CONTEXT_FILES</Name>
+            <Mode/>
+        </Variable>
+        <!-- Auto-run tools on each PR -->
+        <Variable>
+            <Value>["opened","reopened","ready_for_review","synchronize"]</Value>
+            <Name>GITHUB_APP__HANDLE_PR_ACTIONS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>["/describe --pr_description.final_update_message=false","/review","/improve"]</Value>
+            <Name>GITHUB_APP__PR_COMMANDS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>true</Value>
+            <Name>GITHUB_APP__HANDLE_PUSH_TRIGGER</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>["/describe --pr_description.final_update_message=false","/review"]</Value>
+            <Name>GITHUB_APP__PUSH_COMMANDS</Name>
+            <Mode/>
+        </Variable>
+        <!-- Review tuning -->
+        <Variable>
+            <Value>false</Value>
+            <Name>PR_REVIEWER__REQUIRE_TESTS_REVIEW</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>true</Value>
+            <Name>PR_REVIEWER__REQUIRE_SECURITY_REVIEW</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>5</Value>
+            <Name>PR_REVIEWER__NUM_MAX_FINDINGS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>7</Value>
+            <Name>PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>3</Value>
+            <Name>PR_CODE_SUGGESTIONS__NUM_CODE_SUGGESTIONS_PER_CHUNK</Name>
+            <Mode/>
+        </Variable>
+        <!-- Server -->
+        <Variable>
+            <Value>1</Value>
+            <Name>GUNICORN_WORKERS</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>INFO</Value>
+            <Name>CONFIG__LOG_LEVEL</Name>
+            <Mode/>
+        </Variable>
+    </Environment>
+
+    <Labels/>
+    <Config Name="LLM model" Target="CONFIG__MODEL" Default="ollama/kimi-k2.7-code" Mode="" Description="Which Ollama Cloud model reviews your PRs. Prefix with 'ollama/' so pr-agent routes through litellm's Ollama provider using your OLLAMA_API_KEY. Current recommended picks (verified 2026-07-20):&#10;&#10;  ollama/kimi-k2.7-code   — coding-focused agentic model, lower thinking-token cost (DEFAULT, best for code review)&#10;  ollama/deepseek-v4-flash — fast 1M-context MoE, good cheap fallback&#10;  ollama/deepseek-v4-pro  — stronger DeepSeek, three reasoning modes&#10;  ollama/glm-5.2          — Z.ai flagship for long-horizon tasks&#10;  ollama/glm-5.1          — strong coding, prior flagship&#10;  ollama/kimi-k2.6        — general multimodal agentic&#10;  ollama/kimi-k2.5        — earlier Kimi, still solid&#10;  ollama/minimax-m3       — 1M context, native multimodality&#10;  ollama/minimax-m2.7     — coding + agentic workflows&#10;  ollama/qwen3.5:122b     — largest Qwen 3.5 tag, multimodal&#10;  ollama/qwen3.5:27b      — mid-size Qwen, faster&#10;  ollama/gemma4:31b       — frontier at size, reasoning + coding&#10;  ollama/mistral-large-3  — enterprise general-purpose MoE&#10;  ollama/gpt-oss:120b     — OpenAI open-weight reasoning&#10;  ollama/gemini-3-flash-preview — fast frontier, preview&#10;  ollama/nemotron-3-ultra — NVIDIA, long-running agents&#10;  ollama/nemotron-3-super — NVIDIA 120B MoE, 12B active&#10;&#10;Verify the live list anytime: https://ollama.com/search?c=cloud — Ollama retires older cloud models on a published schedule, so if a model 404s, pick another from that page. To use a local Ollama daemon instead of Cloud, set this to e.g. ollama/qwen2.5-coder:32b and point OLLAMA__API_BASE at http://host.docker.internal:11434 in your .secrets.toml." Type="Variable" Display="always" Required="true" Mask="false">ollama/kimi-k2.7-code</Config>
+    <Config Name="Fallback LLM model(s)" Target="CONFIG__FALLBACK_MODELS" Default='["ollama/deepseek-v4-flash"]' Mode="" Description="Comma-separated JSON array of models tried if the primary errors or rate-limits. Same 'ollama/' prefix convention. Example: [&quot;ollama/deepseek-v4-flash&quot;,&quot;ollama/qwen3.5:122b&quot;]" Type="Variable" Display="always" Required="false" Mask="false">["ollama/deepseek-v4-flash"]</Config>
+    <Config Name="Secrets file" Target="/app/pr_agent/settings_prod/.secrets.toml" Default="/mnt/user/appdata/pr-agent/.secrets.toml" Mode="ro" Description="Path to your filled-in .secrets.toml (copy secrets.example.toml from the repo and fill it in). Must contain: [ollama] api_base + api_key (your https://ollama.com/settings/keys key); [github] deployment_type='app', app_id (numeric), webhook_secret, private_key (the full PEM you downloaded from the GitHub App settings). Mounted read-only. This file is the ONLY place the GitHub App private key can live — Unraid GUI fields can't hold multi-line PEM." Type="Path" Display="always" Required="true" Mask="false"/>
+    <Config Name="Webhook port" Target="3000" Default="3000" Mode="tcp" Description="Port the webhook receiver listens on. GitHub POSTs to /api/v1/github_webhooks on this port. Put it behind your Cloudflare Tunnel / Tailscale Funnel / reverse proxy; do NOT expose it directly to the internet without TLS." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
+    <Config Name="Model max input tokens" Target="CONFIG__CUSTOM_MODEL_MAX_TOKENS" Default="128000" Mode="" Description="Max input tokens the model accepts. kimi-k2.7-code and deepseek-v4 support 128k+; lower this if you pick a smaller-context model. Lets pr-agent's PR-compression fit large PRs in one call." Type="Variable" Display="advanced" Required="false" Mask="false">128000</Config>
+    <Config Name="AI call timeout (seconds)" Target="CONFIG__AI_TIMEOUT" Default="300" Mode="" Description="Per-LLM-call timeout. The webhook acks GitHub in milliseconds and runs the review on a background task, so this can be generous without hitting GitHub's ~10s webhook timeout. 300s accommodates slow cloud models." Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
+    <Config Name="Max model tokens (hard cap)" Target="CONFIG__MAX_MODEL_TOKENS" Default="128000" Mode="" Description="Hard cap on tokens usable by any model, regardless of its own default. Keep aligned with CUSTOM_MODEL_MAX_TOKENS." Type="Variable" Display="advanced" Required="false" Mask="false">128000</Config>
+    <Config Name="Large patch policy" Target="CONFIG__LARGE_PATCH_POLICY" Default="clip" Mode="" Description="What to do when a PR diff exceeds the token budget. 'clip' = review the first portion (always produces some review); 'skip' = skip the PR entirely." Type="Variable" Display="advanced" Required="false" Mask="false">clip</Config>
+    <Config Name="Response language" Target="CONFIG__RESPONSE_LANGUAGE" Default="en-US" Mode="" Description="ISO 3166 + ISO 639 locale for review comments. e.g. en-US, de-DE, fr-FR, zh-CN. Change to de-DE for German reviews." Type="Variable" Display="advanced" Required="false" Mask="false">en-US</Config>
+    <Config Name="Repo context files" Target="CONFIG__REPO_CONTEXT_FILES" Default="[]" Mode="" Description="JSON array of repo-relative files (e.g. AGENTS.md, CLAUDE.md) to inject into review prompts. Default [] = none — keeps reviews focused on the diff and avoids prompt bloat from repo-level agent instructions." Type="Variable" Display="advanced" Required="false" Mask="false">[]</Config>
+    <Config Name="Gunicorn workers" Target="GUNICORN_WORKERS" Default="1" Mode="" Description="Number of gunicorn worker processes. Keep at 1 so the /status page's in-memory log buffer sees ALL webhook activity (each worker has its own buffer). The webhook acks in milliseconds and reviews run as background tasks, so one worker handles concurrent reviews fine for a personal bot. Raise only if you review many PRs simultaneously (and accept that /status will show only one worker's logs)." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+    <Config Name="Log level" Target="CONFIG__LOG_LEVEL" Default="INFO" Mode="" Description="Log verbosity: INFO (normal) or DEBUG (verbose, for troubleshooting)." Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
+    <Config Name="Auto-review on PR actions" Target="GITHUB_APP__HANDLE_PR_ACTIONS" Default='["opened","reopened","ready_for_review","synchronize"]' Mode="" Description="JSON array of pull_request actions that trigger auto-review. Defaults: opened, reopened, ready_for_review, synchronize (new commits). Remove 'synchronize' if you don't want re-reviews on every push." Type="Variable" Display="advanced" Required="false" Mask="false">["opened","reopened","ready_for_review","synchronize"]</Config>
+    <Config Name="Auto-run tools" Target="GITHUB_APP__PR_COMMANDS" Default='["/describe --pr_description.final_update_message=false","/review","/improve"]' Mode="" Description="JSON array of pr-agent commands run automatically on each new PR. /describe = AI PR description, /review = inline code review, /improve = committable code suggestions. Remove any you don't want. Available: /describe, /review, /improve, /ask, /update_changelog, /add_docs, /analyze." Type="Variable" Display="advanced" Required="false" Mask="false">["/describe --pr_description.final_update_message=false","/review","/improve"]</Config>
+    <Config Name="Re-review on new commits" Target="GITHUB_APP__HANDLE_PUSH_TRIGGER" Default="true" Mode="" Description="When true, re-run /review automatically when new commits land on an open PR (synchronize action)." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+    <Config Name="Re-review tools" Target="GITHUB_APP__PUSH_COMMANDS" Default='["/describe --pr_description.final_update_message=false","/review"]' Mode="" Description="JSON array of commands run on synchronize (new commits). Defaults to /describe + /review (skips /improve to save cost on every push)." Type="Variable" Display="advanced" Required="false" Mask="false">["/describe --pr_description.final_update_message=false","/review"]</Config>
+    <Config Name="Review: require tests review" Target="PR_REVIEWER__REQUIRE_TESTS_REVIEW" Default="false" Mode="" Description="When true, the reviewer flags missing tests for new behavior. Noisy on pure source changes, so off by default. Toggle on for repos where test coverage matters." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+    <Config Name="Review: require security review" Target="PR_REVIEWER__REQUIRE_SECURITY_REVIEW" Default="true" Mode="" Description="Run the security sub-review (injection, auth gaps, secret leakage, etc.). Recommended on." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+    <Config Name="Review: max findings" Target="PR_REVIEWER__NUM_MAX_FINDINGS" Default="5" Mode="" Description="Cap on the number of findings reported per review. Lower = less noisy, higher = more thorough." Type="Variable" Display="advanced" Required="false" Mask="false">5</Config>
+    <Config Name="Improve: score threshold" Target="PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD" Default="7" Mode="" Description="0-10. /improve only surfaces suggestions scoring at least this high. 7 = only real problems. Lower (4-5) for more suggestions, raise (8-9) for stricter." Type="Variable" Display="advanced" Required="false" Mask="false">7</Config>
+    <Config Name="Improve: suggestions per chunk" Target="PR_CODE_SUGGESTIONS__NUM_CODE_SUGGESTIONS_PER_CHUNK" Default="3" Mode="" Description="Number of code suggestions per diff chunk in /improve. Lower = faster, less noisy." Type="Variable" Display="advanced" Required="false" Mask="false">3</Config>
+</Container>
