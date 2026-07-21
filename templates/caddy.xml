@@ -15,7 +15,7 @@
     <ExtraParams/>
     <PostArgs/>
     <CPUset/>
-    <Description>Caddy edge proxy for PR-agent. The public URL is https://pr-agent.PORKBUN_ZONE/. Forward router TCP 80 to host port 18080 and TCP 443 to host port 18443. Never forward PR-agent port 3000 or Caddy admin port 2019.</Description>
+    <Description>Caddy edge proxy for PR-agent. The public URL is https://pr-agent.PORKBUN_ZONE/. Forward router TCP 443 to host port 18443. TCP 80 to host port 18080 is optional and only enables HTTP-to-HTTPS redirects. Never forward PR-agent port 3000 or Caddy admin port 2019.</Description>
 
     <Networking>
         <Mode>pr-agent-net</Mode>
@@ -82,6 +82,6 @@
     <Config Name="Caddyfile" Target="/etc/caddy/Caddyfile" Default="/mnt/user/appdata/caddy/Caddyfile" Mode="ro" Description="Copy deploy/Caddyfile from this repository here. Mounted read-only." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/Caddyfile</Config>
     <Config Name="Caddy data" Target="/data" Default="/mnt/user/appdata/caddy/data" Mode="rw" Description="Persistent ACME accounts, certificates, and private keys. Back up and protect this directory." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/data</Config>
     <Config Name="Caddy config state" Target="/config" Default="/mnt/user/appdata/caddy/config" Mode="rw" Description="Persistent Caddy configuration state." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/config</Config>
-    <Config Name="HTTP host port" Target="80" Default="18080" Mode="tcp" Description="Router target for public TCP 80. Keep 18080 unless another Unraid service uses it." Type="Port" Display="always" Required="true" Mask="false">18080</Config>
+    <Config Name="HTTP host port" Target="80" Default="18080" Mode="tcp" Description="Optional router target for public TCP 80 redirects. This Docker host mapping alone does not create a WAN forward." Type="Port" Display="always" Required="true" Mask="false">18080</Config>
     <Config Name="HTTPS host port" Target="443" Default="18443" Mode="tcp" Description="Router target for public TCP 443. Keep 18443 unless another Unraid service uses it." Type="Port" Display="always" Required="true" Mask="false">18443</Config>
 </Container>

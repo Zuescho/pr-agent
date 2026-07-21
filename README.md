@@ -63,8 +63,8 @@ pr-agent.<PORKBUN_ZONE> ──▶ router TCP 443 ──▶ Unraid :18443 ──�
 ```
 
 Only Caddy publishes host ports. PR-agent has no host port and is reachable from Caddy only through the private
-`pr-agent-net` Docker network. Public TCP 80 is forwarded to Caddy solely for its automatic HTTP-to-HTTPS redirect;
-certificate issuance and renewal use Porkbun DNS-01.
+`pr-agent-net` Docker network. Public TCP 80 may optionally be forwarded to Caddy for its automatic HTTP-to-HTTPS
+redirect; certificate issuance and renewal use Porkbun DNS-01 and do not require port 80.
 
 ---
 
@@ -104,8 +104,8 @@ curl -4 https://icanhazip.com
 
 The two addresses must match. Stop and ask the ISP for a public IPv4 if the router shows a different address, an
 RFC1918 address (`10/8`, `172.16/12`, or `192.168/16`), or an address in `100.64.0.0/10`. CGNAT and DS-Lite without
-inbound IPv4 cannot receive direct GitHub webhooks. Also confirm that public TCP 80 and 443 are not already forwarded
-to another edge proxy; two proxies cannot share one public `IP:port`.
+inbound IPv4 cannot receive direct GitHub webhooks. Confirm that public TCP 443 is not already forwarded to another
+edge proxy. Check TCP 80 as well only if you want the optional HTTP-to-HTTPS redirect.
 
 ### 2. Purchase and prepare the Porkbun DNS zone
 
@@ -324,13 +324,14 @@ Create only these inbound forwards to the reserved Unraid LAN IPv4:
 
 | WAN | LAN target |
 |---|---|
-| TCP 80 | `<reserved-Unraid-IP>:18080` |
-| TCP 443 | `<reserved-Unraid-IP>:18443` |
+| TCP 80 (optional) | `<reserved-Unraid-IP>:18080` |
+| TCP 443 (required) | `<reserved-Unraid-IP>:18443` |
 
-Allow both through the firewall. Never forward PR-agent port 3000 or Caddy admin port 2019. DNS-01 does not require an
-inbound port, but TCP 80 remains open for Caddy's HTTP-to-HTTPS redirect. If the router cannot translate ports, first
-move and verify Unraid's own management ports, then deliberately change both Caddy mappings to `80:80` and `443:443`.
-Do not overwrite an existing public service's forwards.
+Allow TCP 443 through the firewall. Optionally forward TCP 80 for Caddy's HTTP-to-HTTPS redirect; DNS-01 certificate
+issuance and GitHub's HTTPS webhook do not need it. Never forward PR-agent port 3000 or Caddy admin port 2019.
+If the router cannot translate ports, first move and verify Unraid's management ports, then change the required Caddy
+mapping to `443:443` and, only if using the optional redirect, the HTTP mapping to `80:80`. Do not overwrite an
+existing public service's forwards.
 
 ### 8. Verify the public edge
 
@@ -555,8 +556,8 @@ is intentionally outside this public deployment.
   therefore take about fifteen minutes to reach every resolver.
 - **Domain lifecycle:** keep the dedicated domain renewed, on Porkbun nameservers, and API Access enabled. No manual
   certificate replacement is part of normal operation.
-- **Port 80:** leave the forward active for HTTP-to-HTTPS redirects. DNS-01 certificate renewal itself uses outbound
-  Porkbun API traffic, not inbound HTTP.
+- **Port 80:** the WAN forward is optional and provides only HTTP-to-HTTPS redirects. DNS-01 renewal and GitHub's
+  HTTPS webhook work with TCP 443 alone.
 - **Restart policy:** both services use `unless-stopped`. Persistent Caddy state prevents account and certificate loss
   across container recreation.
 - **Updates:** the workflow publishes matching PR-agent and Caddy `latest`, `sha-*`, and release tags. Pull and restart
