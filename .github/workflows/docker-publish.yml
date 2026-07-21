@@ -142,3 +142,23 @@ jobs:
           labels: ${{ steps.caddy-meta.outputs.labels }}
           cache-from: type=gha,scope=caddy
           cache-to: type=gha,mode=max,scope=caddy
+
+      - name: Verify published Caddy image
+        run: |
+          IFS=$'\n' read -d '' -ra TAGS <<< "$TAGS_OUT" || true
+          IMAGE_TAG="${TAGS[0]}"
+          docker pull "$IMAGE_TAG"
+
+          MODULES="$(docker run --rm "$IMAGE_TAG" caddy list-modules)"
+          grep -Fxq "dns.providers.porkbun" <<< "$MODULES"
+          grep -Fxq "dynamic_dns" <<< "$MODULES"
+
+          docker run --rm \
+            -e ACME_EMAIL=github@zuescho.de \
+            -e PORKBUN_ZONE=example.net \
+            -e PORKBUN_API_KEY=pk1_example \
+            -e PORKBUN_API_SECRET_KEY=sk1_example \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/deploy/Caddyfile,dst=/etc/caddy/Caddyfile,readonly" \
+            "$IMAGE_TAG" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+        env:
+          TAGS_OUT: ${{ steps.caddy-meta.outputs.tags }}
