@@ -1,4 +1,4 @@
-# pr-agent — self-hosted AI PR reviewer on Unraid (LLM backend + GitHub App)
+# pr-agent — self-hosted AI PR reviewer on Unraid (Caddy + Porkbun + GitHub App)
 
 A self-hosted fork of [`the-pr-agent/pr-agent`](https://github.com/the-pr-agent/pr-agent) that reviews pull requests on your GitHub repos and posts comments back as a **distinct bot identity** (`<your-app>[bot]`), powered by **any OpenAI-compatible LLM** (Ollama Cloud, Neuralwatt, OpenRouter, local Ollama, …), running in Docker on Unraid.
 
@@ -11,7 +11,8 @@ This README is the single source of truth: what it is, how to deploy it, and eve
 - **Distinct bot identity** — reviews post as `<your-app-name>[bot]`, not `github-actions[bot]`. One GitHub App install covers every repo you add it to.
 - **No GitHub Actions runner spin-up, no GitHub-side review timeout** — the webhook receiver acks GitHub in milliseconds and runs the LLM call on a background task. A slow model taking 2-3 minutes per PR is a non-issue.
 - **Pluggable LLM backend** — pick any current model via one env var. Defaults to Ollama Cloud; switch to Neuralwatt or any OpenAI-compatible endpoint by changing the model prefix (`ollama/...` → `openai/...`) and the matching secrets section. No code changes, no patches.
-- **Unraid container template** — install via the Unraid "Add Container" GUI with a labeled form for every setting (LLM picker, tool toggles, review tuning). No YAML editing required.
+- **Two importable Unraid templates** — one private PR-agent container plus one public Caddy edge with automatic Porkbun DNS and TLS.
+- **Hands-off public ingress** — Caddy follows a changing public IPv4, renews its own certificate with DNS-01, and exposes only the intended webhook service.
 - **Tools** — auto-runs `/describe` (AI PR description), `/review` (inline code review), `/improve` (committable code suggestions) on every PR; re-runs `/review` on new commits. Also available on-demand via PR comments: `/review`, `/improve`, `/describe`, `/ask <question>`, `/update_changelog`, `/add_docs`, `/analyze`.
 
 
@@ -40,21 +41,30 @@ pr-agent routes LLM calls by the **prefix on `CONFIG__MODEL`**, not by which sec
 ---
 ## How it works
 
+```text
+GitHub PR event
+      │ HTTPS POST /api/v1/github_webhooks
+      ▼
+pr-agent.<PORKBUN_ZONE> ──▶ router TCP 443 ──▶ Unraid :18443 ──▶ Caddy
+      ▲                                                           │
+      │ Porkbun A record (Caddy DDNS, IPv4 only)                  │ pr-agent-net
+      │ Let's Encrypt certificate (Porkbun DNS-01)                ▼
+      └────────────────────────────────────────────────── pr-agent:3000
+                                                                  │ verify HMAC
+                                                                  │ ack 200
+                                                                  ▼
+                                                        background review tools
+                                                                  │
+                                                                  ▼
+                                                        configured LLM provider
+                                                                  │
+                                                                  ▼
+                                                        <your-app>[bot] comment
 ```
-GitHub PR event ──webhook──▶  your tunnel (Cloudflare/Tailscale)  ──▶  Docker container (Unraid)
-                                         POST /api/v1/github_webhooks
-                                              │  verify HMAC signature
-                                              │  ack 200 immediately
-                                              ▼
-                                    background task per tool:
-                                      /describe, /review, /improve
-                                              │
-                                              ▼
-                                    your LLM (Ollama Cloud / Neuralwatt / local)
-                                              │
-                                              ▼
-                                    post review as <your-app>[bot]
-```
+
+Only Caddy publishes host ports. PR-agent has no host port and is reachable from Caddy only through the private
+`pr-agent-net` Docker network. Public TCP 80 is forwarded to Caddy solely for its automatic HTTP-to-HTTPS redirect;
+certificate issuance and renewal use Porkbun DNS-01.
 
 ---
 
@@ -62,82 +72,126 @@ GitHub PR event ──webhook──▶  your tunnel (Cloudflare/Tailscale)  ─�
 
 | File | Purpose |
 |---|---|
-| `README.md` | This file — complete deployment + settings reference |
-| `secrets.example.toml` | Template for `.secrets.toml` (provider key + GitHub App credentials) |
-| `templates/pr-agent.xml` | Unraid container template — GUI form for every setting |
-| `deploy/docker-compose.yml` | Docker Compose file (env-var config, secrets mount, healthcheck) |
-| `deploy/Dockerfile.webhook` | Minimal webhook-only child image (HMAC-guarded webhook + healthcheck, no `/status` page) — the one you deploy (accepts a `BASE_IMAGE` build arg) |
-| `.github/workflows/docker-publish.yml` | CI workflow that builds and publishes the webhook image to GHCR on push to `main` or a `vX.Y.Z` tag |
-| `pr_agent/webhook_app.py` | Entrypoint shim: imports upstream app, **enforces webhook-secret guard at boot** (no status page mounted) |
-| `deploy/Dockerfile.status`, `pr_agent/status_page.py`, `pr_agent/status_app.py` | Optional status-page image (adds `/status` + `/status.json` showing in-flight reviews). Use only if you want the dashboard and are willing to guard it — it exposes repo/PR activity. Not built by the CI workflow. |
+| `README.md` | Complete deployment and settings reference |
+| `secrets.example.toml` | Template for LLM and GitHub App credentials |
+| `templates/pr-agent.xml` | Private PR-agent Unraid template |
+| `templates/caddy.xml` | Public Caddy Unraid template with masked Porkbun credential fields |
+| `deploy/docker-compose.yml` | Non-GUI mirror of both containers on `pr-agent-net` |
+| `deploy/Caddyfile` | Dynamic A record, DNS-01 TLS, access log, and reverse-proxy contract |
+| `deploy/Dockerfile.caddy` | Pinned Caddy build with Porkbun DNS and Dynamic DNS modules |
+| `deploy/Dockerfile.webhook` | Webhook-only PR-agent child image with the mandatory-secret boot guard |
+| `.github/workflows/docker-publish.yml` | Publishes matching PR-agent and Caddy tags to GHCR |
+| `pr_agent/webhook_app.py` | Entrypoint shim that enforces the webhook-secret guard |
+| `deploy/Dockerfile.status`, `pr_agent/status_page.py`, `pr_agent/status_app.py` | Optional, unguarded status image; not built or deployed by this guide |
 
-No upstream files are modified — all overrides are via env vars + a child Docker image + a CI workflow. This keeps pr-agent updates painless: `git pull` (GitHub Actions rebuilds and publishes the image to GHCR automatically) or local rebuild.
+The application customization remains isolated from upstream PR-agent. Deployment behavior lives in the child image,
+environment variables, mounted secrets, Caddy configuration, and Unraid templates.
 
 ---
 
 ## Deployment guide
 
-### 1. Create the GitHub App
+`PORKBUN_ZONE` always means the purchased registrable domain only, for example `example.net`. The public hostname is
+always `pr-agent.<PORKBUN_ZONE>`; do not enter `pr-agent.` in the zone field.
 
-Go to <https://github.com/settings/apps> → **New GitHub App** (or under an org).
+### 1. Confirm a directly reachable public IPv4
+
+Reserve the Unraid server's LAN IPv4 in DHCP. On the router/firewall, note the WAN IPv4. Then run this on Unraid:
+
+```bash
+curl -4 https://icanhazip.com
+```
+
+The two addresses must match. Stop and ask the ISP for a public IPv4 if the router shows a different address, an
+RFC1918 address (`10/8`, `172.16/12`, or `192.168/16`), or an address in `100.64.0.0/10`. CGNAT and DS-Lite without
+inbound IPv4 cannot receive direct GitHub webhooks. Also confirm that public TCP 80 and 443 are not already forwarded
+to another edge proxy; two proxies cannot share one public `IP:port`.
+
+### 2. Purchase and prepare the Porkbun DNS zone
+
+1. Buy a dedicated domain at Porkbun, keep Porkbun's authoritative nameservers, and enable domain auto-renewal.
+   Existing email domains and `zuescho.de` remain outside this deployment.
+2. In **Domain Management → Details**, enable API Access for this domain as described in Porkbun's
+   [API setup guide](https://kb.porkbun.com/article/190-getting-started-with-the-porkbun-api).
+3. Create a dedicated API key named `pr-agent-caddy` and save its one-time secret. Apply Porkbun's
+   [per-key domain restriction](https://porkbun.com/api/json/v3/documentation#api-key-scoping-ip--domain-restrictions)
+   so the key can modify only this purchased domain.
+4. Do **not** apply a source-IP restriction. Caddy must still authenticate after the WAN IPv4 changes. If the account
+   UI cannot restrict a key by target domain, place this one domain in a separate Porkbun account; do not deploy an
+   account-wide key that can modify unrelated zones.
+5. In the DNS editor, remove only conflicting `A`, `AAAA`, `CNAME`, or `ALIAS` records named `pr-agent`. Do not create
+   a replacement. Caddy creates and owns the IPv4 `A` record through Porkbun's
+   [DNS API](https://porkbun.com/llms/dns).
+
+Do not download or copy Porkbun certificates. Caddy owns ACME issuance, renewal, and private-key storage.
+
+### 3. Create the GitHub App
+
+Go to <https://github.com/settings/apps> → **New GitHub App** (or create it under an organization).
 
 | Field | Value |
 |---|---|
-| GitHub App name | `pr-agent` (or whatever you want the bot to be called) |
-| Homepage URL | anything (your repo URL is fine) |
-| Webhook → Active | ✅ checked |
-| Webhook URL | `https://<YOUR-TUNNEL-HOST>/api/v1/github_webhooks` (set up in step 4) |
-| Webhook secret | a random hex string — generate with `python -c "import secrets; print(secrets.token_hex(20))"` and **save it** |
+| GitHub App name | `pr-agent` or the desired bot name |
+| Homepage URL | The repository URL or another valid homepage |
+| Webhook → Active | Enabled |
+| Webhook URL | `https://pr-agent.<PORKBUN_ZONE>/api/v1/github_webhooks` |
+| Webhook content type | `application/json` |
+| Webhook secret | A high-entropy value generated once and saved |
 | Repository permissions | **Pull requests: Read & write**, **Issue comment: Read & write**, **Contents: Read-only**, **Metadata: Read-only** |
 | Subscribe to events | **Pull request**, **Issue comment** |
 
-Create the app, then:
-1. On the app's settings page, click **Generate a private key** → a `.pem` file downloads.
-2. Note the **App ID** (numeric, near the top of the settings page).
+Generate a secret locally:
 
-> ⚠️ **The webhook secret is mandatory.** The container refuses to start if it's missing or still set to the placeholder — this prevents the webhook endpoint from silently accepting unauthenticated requests (see Security below).
-
-### 2. Get the Docker image
-
-Every push to `main` (and every `vX.Y.Z` tag) triggers the `docker-publish.yml` workflow, which builds the image and publishes it to GHCR:
-
-```
-ghcr.io/zuescho/pr-agent:latest      # tracks main; rebuild on every push
-ghcr.io/zuescho/pr-agent:sha-<short>  # immutable, per-commit
-ghcr.io/zuescho/pr-agent:<version>    # vX.Y.Z tag, e.g. 1.2.3
+```bash
+python -c "import secrets; print(secrets.token_hex(20))"
 ```
 
-**Option A — pull the prebuilt image (recommended, no build needed):**
+After creating the app, generate and download its private key and record the numeric App ID. Keep the exact same
+webhook secret in GitHub and `/mnt/user/appdata/pr-agent/.secrets.toml`. The PR-agent image refuses to start when this
+secret is missing, blank, or still a placeholder.
+
+### 4. Get both deployment images
+
+Every push to `main` and every `vX.Y.Z` tag publishes matching tag sets:
+
+```text
+ghcr.io/zuescho/pr-agent:latest
+ghcr.io/zuescho/pr-agent-caddy:latest
+ghcr.io/zuescho/pr-agent:sha-<short>
+ghcr.io/zuescho/pr-agent-caddy:sha-<short>
+ghcr.io/zuescho/pr-agent:<version>
+ghcr.io/zuescho/pr-agent-caddy:<version>
+```
+
+After the first successful workflow run, set **both** GHCR packages to public visibility in their package settings so
+Unraid can pull anonymously. Then pull them:
 
 ```bash
 docker pull ghcr.io/zuescho/pr-agent:latest
+docker pull ghcr.io/zuescho/pr-agent-caddy:latest
 ```
 
-Then use `ghcr.io/zuescho/pr-agent:latest` as the image in the compose file / Unraid template (it already defaults to this; see step 5). The package is public-readable, so no `docker login` is needed to pull. The image is webhook-only (no `/status` page) — the port can go directly behind a public tunnel without an extra auth layer.
-
-**Option B — build locally (if you forked further or want a custom tag):**
+For a local build instead:
 
 ```bash
-# 1. Base image (the github_app target from the upstream Dockerfile):
 docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
-
-# 2. Webhook image (thin child — HMAC-guarded webhook + healthcheck, no /status page):
-docker build -t local/pr-agent:github_app-webhook -f deploy/Dockerfile.webhook .
+docker build --build-arg BASE_IMAGE=local/pr-agent:github_app -t local/pr-agent:github_app-webhook -f deploy/Dockerfile.webhook .
+docker build --platform linux/amd64 -t local/pr-agent-caddy -f deploy/Dockerfile.caddy .
 ```
 
-The first builds the `github_app` target (Python 3.12 slim + pr-agent + gunicorn/uvicorn). The second layers the webhook shim on top (boot guard, no status page). The compose file and Unraid template default to `ghcr.io/zuescho/pr-agent:latest`; swap to `local/pr-agent:github_app-webhook` if you built locally. (To serve the `/status` dashboard instead, build `deploy/Dockerfile.status` — but that exposes repo/PR activity and needs guarding at the reverse-proxy layer.)
+The Caddy image pins Caddy 2.11.4 and exact commits of both required modules; do not replace those pins with `latest`
+or module branches.
 
-> **First run:** the very first push to `main` after adding this workflow creates the `ghcr.io/zuescho/pr-agent` package under your user account. Until it exists, `docker pull` 404s — wait for the first workflow run to finish (check the Actions tab). The package is public by default; if you want it private, toggle it under <https://github.com/users/Zuescho/packages/container/pr-agent/settings> (private means `docker login ghcr.io` is then required to pull).
-
-### 3. Create the secrets file on Unraid
+### 5. Create the PR-agent secrets file
 
 ```bash
 mkdir -p /mnt/user/appdata/pr-agent
 ```
 
-Create `/mnt/user/appdata/pr-agent/.secrets.toml` by copying `secrets.example.toml` from this repo. Fill in **exactly one** LLM provider section plus the `[github]` section:
+Copy `secrets.example.toml` to `/mnt/user/appdata/pr-agent/.secrets.toml`. Fill in exactly one LLM provider section
+plus `[github]`.
 
-**Option A — Ollama Cloud (default):**
+**Ollama Cloud (default):**
 
 ```toml
 [ollama]
@@ -147,107 +201,187 @@ api_key = "<your Ollama Cloud key from https://ollama.com/settings/keys>"
 [github]
 deployment_type = "app"
 app_id = <your App ID, numeric>
-webhook_secret = "<the webhook secret you generated in step 1>"
+webhook_secret = "<the webhook secret configured in GitHub>"
 private_key = """\
 -----BEGIN RSA PRIVATE KEY-----
-<paste the entire contents of the .pem file you downloaded>
+<paste the entire downloaded PEM>
 -----END RSA PRIVATE KEY-----
 """
 ```
 
-**Option B — Neuralwatt (or any OpenAI-compatible endpoint):**
+**Neuralwatt or another OpenAI-compatible endpoint:**
 
 ```toml
 [openai]
 api_base = "https://api.neuralwatt.com/v1"
-api_key = "<your Neuralwatt key from https://portal.neuralwatt.com>"
-# For other OpenAI-compatible providers, swap api_base for their /v1 URL:
-#   OpenAI:        https://api.openai.com/v1
-#   OpenRouter:    https://openrouter.ai/api/v1
-#   Together:      https://api.together.xyz/v1
-#   Groq:          https://api.groq.com/openai/v1
-#   local vLLM:    http://host.docker.internal:8000/v1
+api_key = "<your provider key>"
 
 [github]
 deployment_type = "app"
 app_id = <your App ID, numeric>
-webhook_secret = "<the webhook secret you generated in step 1>"
+webhook_secret = "<the webhook secret configured in GitHub>"
 private_key = """\
 -----BEGIN RSA PRIVATE KEY-----
-<paste the entire contents of the .pem file you downloaded>
+<paste the entire downloaded PEM>
 -----END RSA PRIVATE KEY-----
 """
 ```
 
-Then set `CONFIG__MODEL` to a model with the **matching prefix**: `ollama/kimi-k2.7-code` for Option A, `openai/kimi-k2.7-code` for Option B. See the LLM model picker below for the full list per provider.
+Set `CONFIG__MODEL` and `CONFIG__FALLBACK_MODELS` to the matching `ollama/` or `openai/` prefix. Configuration tuning
+stays in environment variables; `.secrets.toml` contains credentials only.
 
-**Config overrides (model, tools, tuning) are NOT in this file** — they're environment variables in the compose file / Unraid template. See the Settings reference below. The `.secrets.toml` holds only credentials.
+### 6. Prepare Unraid
 
-### 4. Expose the webhook endpoint
-
-The container listens on port 3000 for `POST /api/v1/github_webhooks`. Unraid is behind your router's NAT, so pick one:
-
-- **Cloudflare Tunnel** (recommended, free): `cloudflared tunnel` maps a public hostname to `http://<unraid-ip>:3000`. No port forwarding, no cert management.
-- **Tailscale Funnel**: if you already run Tailscale on Unraid, `tailscale funnel` exposes a port publicly.
-- **Port forward + reverse proxy**: forward 443 to Unraid, run Caddy/Traefik with Let's Encrypt in front of the container.
-
-The public URL goes into the GitHub App's **Webhook URL** field (step 1). The path must be `/api/v1/github_webhooks`.
-
-### 5. Start the container
-
-#### Option A — Unraid container template (recommended)
-
-`templates/pr-agent.xml` turns every config knob into a labeled GUI field.
-
-1. Copy `templates/pr-agent.xml` to your Unraid host at `/boot/config/plugins/dockerMan/templates-user/pr-agent.xml` (create the `templates-user` directory if it doesn't exist).
-2. In the Unraid web UI → **Docker** tab → **Add Container** → pick **pr-agent** from the template dropdown.
-3. Fill in the visible fields (see Settings reference for each):
-   - **LLM model** — the model that reviews your PRs. The field description lists every current Ollama Cloud model with a one-line characterization and a link to the live catalog. Default: `ollama/kimi-k2.7-code`.
-   - **Fallback LLM model(s)** — tried if the primary errors.
-   - **Secrets file** — path to your filled-in `.secrets.toml` (default `/mnt/user/appdata/pr-agent/.secrets.toml`).
-   - **Webhook port** — `3000` (behind your tunnel).
-4. Click **Advanced View** for the tuning knobs (model max tokens, AI timeout, large-patch policy, response language, auto-review triggers, which tools run, review strictness, `/improve` score threshold, gunicorn workers, log level). Every field has a description.
-5. **Apply**. The container starts within ~15s.
-
-To change the LLM later: edit the container in the Unraid Docker UI, change the **LLM model** field, apply. No YAML editing, no rebuild — it's an env-var swap.
-
-#### Option B — Docker Compose Manager plugin
-
-Install the **Docker Compose Manager** plugin in Unraid, then add `deploy/docker-compose.yml` as a new compose project. Same settings as the template, just in YAML. Adjust the volume path if your appdata lives elsewhere. Start it.
-
-### 6. Verify the webhook is reachable
-
-From outside your network:
+In **Settings → Docker**, enable preservation of user-defined networks. Inspect the required network first:
 
 ```bash
-curl -s https://<YOUR-TUNNEL-HOST>/
-# → {"status":"ok"}
+docker network inspect pr-agent-net
 ```
-Then in your GitHub App settings, scroll to **Recent Deliveries**. After step 7 you'll see webhook events with their HTTP responses. GitHub retries failed deliveries for up to 3 days, so a transient tunnel blip won't lose reviews.
 
-### 7. Install the App on your repos
-
-Back in the GitHub App settings → **Install App** → choose the repos you want reviewed. From now on, opening a PR on any of them triggers:
-
-1. GitHub POSTs the `pull_request` event to your tunnel URL.
-2. The container validates the `X-Hub-Signature-256` HMAC with your webhook secret.
-3. It acks `200` immediately and queues `/describe`, `/review`, `/improve` on a background task.
-4. Each tool calls your configured LLM provider (Ollama Cloud / Neuralwatt / other), posts its comment as `<your-app>[bot]`.
-
-Comment `/review`, `/improve`, `/describe`, or `/ask <question>` on any PR to re-trigger a tool on demand.
-
-### 8. Sanity-check commands
+If Docker reports that it does not exist, create it once:
 
 ```bash
-# Container logs (live)
-docker logs -f pr-agent
-
-# Confirm the App authenticates (from inside the container)
-docker exec -it pr-agent python -c "from pr_agent.config_loader import get_settings; print('app_id:', get_settings().github.app_id, 'model:', get_settings().config.model)"
-
-# Local CLI smoke test against a real PR (uses your mounted .secrets.toml)
-docker exec -it pr-agent python pr_agent/cli.py --pr_url https://github.com/<you>/<repo>/pull/<N> review
+docker network create pr-agent-net
 ```
+
+Confirm its subnet:
+
+```bash
+docker network inspect pr-agent-net --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+```
+
+It must be inside `10/8`, `172.16/12`, or `192.168/16`, matching the PR-agent image's trusted proxy CIDRs.
+
+From a checkout of this repository on Unraid, install the templates and Caddyfile:
+
+```bash
+mkdir -p /boot/config/plugins/dockerMan/templates-user
+mkdir -p /mnt/user/appdata/caddy/data /mnt/user/appdata/caddy/config
+cp templates/pr-agent.xml /boot/config/plugins/dockerMan/templates-user/pr-agent.xml
+cp templates/caddy.xml /boot/config/plugins/dockerMan/templates-user/caddy.xml
+cp deploy/Caddyfile /mnt/user/appdata/caddy/Caddyfile
+```
+
+The Caddyfile is mounted read-only. `/mnt/user/appdata/caddy/data` persists ACME accounts, certificates, and private
+keys; `/mnt/user/appdata/caddy/config` persists Caddy state.
+
+#### Import `pr-agent`
+
+In **Docker → Add Container**, select `pr-agent`. The template has no WebUI shortcut and publishes no host port.
+
+| Field | Default / required value |
+|---|---|
+| LLM model | `ollama/kimi-k2.7-code`; change prefix when using another provider |
+| Fallback LLM model(s) | `["ollama/deepseek-v4-flash"]`; use the same provider prefix |
+| Secrets file | `/mnt/user/appdata/pr-agent/.secrets.toml` |
+| Model max input tokens | `128000` |
+| AI call timeout (seconds) | `300` |
+| Max model tokens (hard cap) | `128000` |
+| Large patch policy | `clip` |
+| Response language | `en-US` |
+| Repo context files | `[]` |
+| Gunicorn workers | `1` |
+| Log level | `INFO` |
+| Auto-review on PR actions | `["opened","reopened","ready_for_review","synchronize"]` |
+| Auto-run tools | `["/describe --pr_description.final_update_message=false","/review","/improve"]` |
+| Re-review on new commits | `true` |
+| Re-review tools | `["/describe --pr_description.final_update_message=false","/review"]` |
+| Review: require tests review | `false` |
+| Review: require security review | `true` |
+| Review: max findings | `5` |
+| Improve: score threshold | `7` |
+| Improve: suggestions per chunk | `3` |
+
+Apply it and verify that the `pr-agent` container becomes healthy.
+
+#### Import `caddy`
+
+Select `caddy` from **Add Container** and fill every field:
+
+| Field | Value |
+|---|---|
+| Porkbun DNS zone | Required; purchased registrable domain only |
+| Porkbun API key | Required, masked; dedicated domain-scoped key |
+| Porkbun API secret key | Required, masked; matching one-time secret |
+| ACME account email | `github@zuescho.de` |
+| Caddyfile | `/mnt/user/appdata/caddy/Caddyfile` (read-only) |
+| Caddy data | `/mnt/user/appdata/caddy/data` |
+| Caddy config state | `/mnt/user/appdata/caddy/config` |
+| HTTP host port | `18080` mapped to container port 80 |
+| HTTPS host port | `18443` mapped to container port 443 |
+
+Never place either Porkbun credential in the Caddyfile, repository, image, or logs. Apply the template. Enable Unraid
+AutoStart for both containers and order `pr-agent` before `caddy`. If Caddy starts first, a temporary `502` is expected
+and clears automatically when Docker DNS can reach `pr-agent:3000`.
+
+**Compose alternative:** `deploy/docker-compose.yml` is the exact non-GUI topology. Supply the three required Porkbun
+variables through Compose Manager or an ignored `.env`, keep the same external `pr-agent-net`, and never commit that
+file. PR-agent still has no host `ports` entry.
+
+### 7. Configure the router and firewall
+
+Create only these inbound forwards to the reserved Unraid LAN IPv4:
+
+| WAN | LAN target |
+|---|---|
+| TCP 80 | `<reserved-Unraid-IP>:18080` |
+| TCP 443 | `<reserved-Unraid-IP>:18443` |
+
+Allow both through the firewall. Never forward PR-agent port 3000 or Caddy admin port 2019. DNS-01 does not require an
+inbound port, but TCP 80 remains open for Caddy's HTTP-to-HTTPS redirect. If the router cannot translate ports, first
+move and verify Unraid's own management ports, then deliberately change both Caddy mappings to `80:80` and `443:443`.
+Do not overwrite an existing public service's forwards.
+
+### 8. Verify the public edge
+
+Watch startup:
+
+```bash
+docker logs -f caddy
+```
+
+With no pre-created `pr-agent` DNS record, Caddy must log `updating DNS record`, `finished updating DNS`, and successful
+certificate issuance without Porkbun authentication, propagation, ACME, or storage errors.
+
+From a Windows system on cellular or another external network:
+
+```powershell
+$zone = "<purchased-domain>"
+$hostName = "pr-agent.$zone"
+Resolve-DnsName $hostName -Type A -Server 1.1.1.1
+curl.exe -I "http://$hostName/"
+curl.exe -i "https://$hostName/"
+curl.exe -i -X POST -H "Content-Type: application/json" --data "{}" "https://$hostName/api/v1/github_webhooks"
+openssl s_client -connect "${hostName}:443" -servername $hostName -showcerts | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+```
+
+Required results:
+
+- The public `A` record equals the router's current WAN IPv4.
+- Porkbun shows exactly one `pr-agent` `A` record with TTL 600 and no `AAAA`, `CNAME`, or `ALIAS` record of that name.
+- HTTP redirects to HTTPS.
+- HTTPS `/` returns `200` with `{"status":"ok"}`.
+- An unsigned JSON webhook traverses DNS and Caddy but returns `403` from PR-agent.
+- The certificate is publicly trusted and its SAN contains exactly `DNS:pr-agent.<PORKBUN_ZONE>`.
+- `docker port pr-agent` prints nothing; `docker port caddy` shows only `80/tcp -> 18080` and `443/tcp -> 18443`.
+
+Test externally; lack of NAT reflection must not be mistaken for a broken deployment.
+
+### 9. Install the App and exercise a real delivery
+
+Install the GitHub App on the selected repositories. Open a PR, or use **Recent Deliveries** to manually redeliver a
+`pull_request` event. GitHub does **not** automatically retry failed deliveries; Recent Deliveries can
+[manually redeliver events from the previous three days](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks).
+
+The delivery must return `200` within GitHub's
+[ten-second response limit](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks#respond-to-webhook-deliveries-within-10-seconds),
+then the configured bot must add its PR comments. Match the GitHub delivery with both `docker logs pr-agent` and
+`docker logs caddy`.
+
+Finally, restart both containers and repeat the HTTPS health and unsigned-webhook checks. Confirm certificate state
+remains under `/mnt/user/appdata/caddy/data`. At the next ISP address change, Caddy polls within five minutes; Porkbun's
+ten-minute minimum TTL means public resolvers can take about fifteen minutes total to converge without operator or
+certificate intervention.
 
 ---
 
@@ -383,64 +517,101 @@ The same `openai/` prefix works for any OpenAI-compatible endpoint. Set `[openai
 ---
 ## Endpoints
 
-The webhook image exposes only two paths on port 3000 — nothing else to guard:
+Caddy publishes the application's two routes at `https://pr-agent.<PORKBUN_ZONE>`:
 
 | Endpoint | Returns |
 |---|---|
-| `POST /api/v1/github_webhooks` | The GitHub webhook receiver. HMAC-guarded (`X-Hub-Signature-256`, constant-time compare); rejects forged payloads with 403. This is the only path GitHub POSTs to. |
-| `GET /` | `{"status":"ok"}` — healthcheck (used by the Docker healthcheck). Harmless. |
+| `POST /api/v1/github_webhooks` | GitHub webhook receiver. Requires a valid `X-Hub-Signature-256`; missing or forged signatures return 403. |
+| `GET /` | `{"status":"ok"}` for health and edge verification. |
 
-There is **no `/status` dashboard** in this image — the port can go directly behind a public tunnel (Cloudflare Tunnel / Tailscale Funnel) without an extra auth layer. The only thing a random visitor can reach is the `{"status":"ok"}` healthcheck. Use `docker logs pr-agent` for debugging.
-
-> **Optional status image:** if you later want a live dashboard showing in-flight reviews, the model, and a log tail, build `deploy/Dockerfile.status` instead. It adds `/status` + `/status.json`, but those routes are unauthenticated and expose repo/PR activity — only run that image behind a guarded reverse proxy, not a raw public tunnel.
+PR-agent still listens on container port 3000, but that port is not published on the Unraid host. Only Caddy can reach
+it over `pr-agent-net`. The deployed image has no `/status` dashboard. The optional status image is unauthenticated and
+is intentionally outside this public deployment.
 
 ---
 
 ## Security
 
-- **Webhook authentication is enforced at boot.** The container refuses to start if `github.webhook_secret` is missing, empty, or still the placeholder. This closes a real upstream gap: `get_body()` in `pr_agent/servers/github_app.py` only calls `verify_signature()` inside `if webhook_secret:`, so a misconfigured secret would silently leave the endpoint unauthenticated. Fail-fast > silent vuln.
-- **No status page to guard.** The deployed webhook image exposes only the HMAC-guarded webhook and a harmless `{"status":"ok"}` healthcheck. The port can go directly behind a public tunnel (Cloudflare Tunnel / Tailscale Funnel) with no extra auth layer — there's nothing else to protect. (The optional status image in `deploy/Dockerfile.status` DOES expose repo/PR activity and would need guarding at the reverse proxy; it's not what the CI workflow builds.)
-- **`--forwarded-allow-ips` is scoped to private CIDRs** (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1) in the webhook image's CMD, not the upstream `*` wildcard. Your tunnel/reverse proxy sits in those ranges; clients can't spoof `X-Forwarded-*` headers.
-- **HMAC signature validation** (`pr_agent/servers/utils.py:verify_signature`) uses `hmac.compare_digest` (constant-time) and raises 403 on missing/mismatched signatures.
+- **HMAC is the public endpoint's authentication boundary.** The image refuses to boot without a real
+  `github.webhook_secret`; `verify_signature()` uses `hmac.compare_digest` and rejects missing or mismatched
+  `X-Hub-Signature-256` values with 403.
+- **Do not add Basic Auth.** GitHub cannot answer an interactive authentication challenge, so deliveries would fail.
+- **Do not maintain a static GitHub source-IP allowlist.** GitHub can change its ranges; signature verification is the
+  durable request-authentication control.
+- **PR-agent is not host-published.** Caddy is the only ingress, and Caddy's admin API on port 2019 is never published.
+- **Trusted proxy headers are private-only.** The webhook image trusts forwarded headers only from `10/8`,
+  `172.16/12`, `192.168/16`, and loopback. Verify `pr-agent-net` uses one of those private ranges.
+- **Porkbun access is least privilege.** Use a dedicated domain-scoped key without source-IP restriction. Store it only
+  in masked Unraid fields or an ignored Compose `.env`; rotate it immediately if exposed.
+- **Certificate state is sensitive.** Protect and back up `/mnt/user/appdata/caddy/data`, which contains ACME accounts,
+  certificates, and private keys.
 
 ---
 
 ## Operating notes
 
-- **Unraid version**: run **7.3.2 or later**. It fixes CVE-2026-3838 (a path-traversal command-execution vulnerability in the WebGUI's `update.php`) and ships security fixes across openssl, nginx, curl, samba, php, openssh, and more. The 7.3.0 release added an optional fixed-MAC field to Docker templates — our template doesn't use it (the bot reaches out to GitHub/Ollama; nothing needs to reach it by a stable MAC), and 7.3.x leaves existing templates unchanged when networking is owned by the template (as ours is). Our template uses only the standard `Container version="2"` schema with `Variable`/`Path`/`Port` config types on a `bridge` network — fully compatible with 7.3.2, no template changes required.
-- **Cost**: LLM providers bill per token. `kimi-k2.7-code` is optimized for lower thinking-token usage; a typical PR review is well under $0.05. Monitor at your provider's dashboard: Ollama Cloud &lt;https://ollama.com/settings/keys&gt;, Neuralwatt &lt;https://portal.neuralwatt.com&gt;.
-- **Model retirements**: providers periodically retire models. Check Ollama &lt;https://ollama.com/search?c=cloud&gt; or Neuralwatt `curl https://api.neuralwatt.com/v1/models` and update `CONFIG__MODEL` / `CONFIG__FALLBACK_MODELS` when needed.
-- **Restart policy**: the compose file sets `unless-stopped`, so reviews survive Unraid reboots once the Docker service comes back.
-- **Updates**: to pick up upstream pr-agent fixes or your own changes on `main`, the `docker-publish.yml` workflow rebuilds and publishes `ghcr.io/zuescho/pr-agent:latest` automatically. On Unraid, `docker pull ghcr.io/zuescho/pr-agent:latest` (or update the container in the Docker UI) and restart. No patches to reapply — all your customizations are env vars + the mounted secrets file. To pin a specific build, use its `sha-<short>` or `vX.Y.Z` tag. If you build locally instead, `git pull` and re-run both `docker build` commands from step 2.
-- **Multiple repos**: one App install covers every repo you add in the Install App tab. No per-repo config needed — each reviewed repo can optionally drop a `.pr_agent.toml` at its root to override tools per-repo.
-- **Forked PRs**: if you accept external contributor PRs, the webhook handler works regardless of PR source (it uses the GitHub API to fetch PR data, not a local checkout).
+- **Unraid version:** run 7.3.2 or later and preserve user-defined Docker networks across service restarts.
+- **DNS convergence:** Caddy checks every five minutes; Porkbun enforces a 600-second minimum TTL. A WAN IPv4 change can
+  therefore take about fifteen minutes to reach every resolver.
+- **Domain lifecycle:** keep the dedicated domain renewed, on Porkbun nameservers, and API Access enabled. No manual
+  certificate replacement is part of normal operation.
+- **Port 80:** leave the forward active for HTTP-to-HTTPS redirects. DNS-01 certificate renewal itself uses outbound
+  Porkbun API traffic, not inbound HTTP.
+- **Restart policy:** both services use `unless-stopped`. Persistent Caddy state prevents account and certificate loss
+  across container recreation.
+- **Updates:** the workflow publishes matching PR-agent and Caddy `latest`, `sha-*`, and release tags. Pull and restart
+  both images together; use matching immutable tags when pinning a deployment.
+- **Failed GitHub deliveries:** they are not retried automatically. Manually redeliver eligible events from Recent
+  Deliveries within three days after the edge is healthy.
+- **Multiple repositories and forked PRs:** one App installation can cover every selected repository, including PRs
+  whose head branch comes from a fork.
+- **LLM cost and model lifecycle:** monitor the chosen provider and update model IDs when the provider retires them.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Cause / Fix |
+| Symptom | Cause / fix |
 |---|---|
-| Container exits at boot with `FATAL: github.webhook_secret is not configured (or is blank/placeholder)` | You didn't create/fill `/mnt/user/appdata/pr-agent/.secrets.toml`, or `webhook_secret` is empty/whitespace/still the placeholder. The guard refuses to boot rather than run an unauthenticated webhook. Create the file from `secrets.example.toml` and fill in the secret from step 1. |
-| `docker pull ghcr.io/zuescho/pr-agent:latest` returns `not found: manifest unknown` | The first CI build hasn't completed (or `main` hasn't been pushed since the workflow was added). Check the **Actions** tab for a green `Docker publish` run. The package only exists after the first successful workflow run. |
-| `docker pull` returns `denied: denied to access` | The package was set to private under <https://github.com/users/Zuescho/packages/container/pr-agent/settings>. Either set it public, or `docker login ghcr.io -u Zuescho` with a PAT that has `read:packages`. |
-| `docker build` step 2 fails with `FROM local/pr-agent:github_app` not found | You skipped step 1 (the base image) in a local build. Build the base first, or use the prebuilt GHCR image (`ghcr.io/zuescho/pr-agent:latest`) instead. |
-| GitHub App **Recent Deliveries** shows 403 | Wrong webhook secret, or the tunnel isn't forwarding. Re-check the secret matches between the App settings and `.secrets.toml`. |
-| GitHub App shows redelivery loops (200 but no review appears) | Check `docker logs pr-agent` — likely an LLM auth error (wrong `api_key` for your provider) or a retired/wrong model (404). Update the key in `.secrets.toml` or `CONFIG__MODEL`. If both `[openai]` and `[ollama]` sections are filled in `.secrets.toml`, Ollama silently wins the `api_base` — comment out the one for the provider you're NOT using. |
-| Reviews post as `github-actions[bot]` not `<your-app>[bot]` | `deployment_type` isn't `app`, or the App isn't installed on the repo. Check `.secrets.toml` has `deployment_type = "app"` and the App is installed via the Install App tab. |
-| `Model not found` / 404 errors in logs | The model id is wrong, retired, or the prefix doesn't match your provider. Verify: Ollama at <https://ollama.com/search?c=cloud>, Neuralwatt at `curl https://api.neuralwatt.com/v1/models`, or your provider's model list. Update `CONFIG__MODEL`. Remember the prefix must match the filled-in secrets section (`ollama/` ↔ `[ollama]`, `openai/` ↔ `[openai]`), and only ONE section should be filled in. |
+| Router WAN IPv4 differs from `curl -4 https://icanhazip.com`, or is private/`100.64/10` | CGNAT or DS-Lite blocks direct inbound IPv4. Stop and request a public IPv4 from the ISP. |
+| `pr-agent.<PORKBUN_ZONE>` does not resolve | Confirm the domain is not expired, still uses Porkbun nameservers, and has API Access enabled. Inspect `docker logs caddy` for DDNS errors. |
+| Caddy logs Porkbun authentication errors | The key/secret pair is wrong, revoked, or API Access is disabled. Reissue the dedicated key and keep it restricted to only the deployment domain, with no source-IP rule. |
+| The Porkbun key can modify unrelated domains | The key is over-scoped. Restrict it to the purchased domain before deployment; if the UI cannot do that, isolate the domain in a separate Porkbun account. |
+| Caddy logs DNS update errors | Remove conflicting `pr-agent` `AAAA`, `CNAME`, or `ALIAS` records, confirm the zone value is the registrable domain only, and verify Porkbun remains authoritative. |
+| Caddy logs ACME propagation or challenge errors | Verify the Porkbun module can create `_acme-challenge` records, wait for DNS propagation, check outbound DNS/HTTPS, and keep `/data` writable. |
+| HTTPS returns `502` | Caddy cannot resolve or connect to `pr-agent:3000`. Confirm both containers are running on `pr-agent-net`, PR-agent is healthy, and the network subnet is private. |
+| Router cannot forward public 80/443, or another service already owns them | Do not overwrite the existing rules. Make one Caddy instance the shared edge, or redesign the edge before deployment. |
+| `docker port pr-agent` prints a host mapping | The old template is still active. Remove the mapping and re-import the current private-network template; never expose port 3000. |
+| GitHub Recent Deliveries returns 403 | The request reached PR-agent but the webhook secrets differ. Put the exact same high-entropy secret in GitHub and `.secrets.toml`. |
+| GitHub delivery returns 200 but no review appears | Check `docker logs pr-agent` for App installation, provider authentication, model ID, or mixed-provider configuration errors. |
+| A failed GitHub delivery never retries | Expected. Use Recent Deliveries to manually redeliver an event from the previous three days. |
+| Either GHCR image returns `manifest unknown` | The first workflow run has not published that package/tag. Wait for the Docker publish workflow to succeed. |
+| Pulling either GHCR image returns `denied` | Make both packages public-readable, or authenticate Unraid to GHCR with `read:packages`. |
 
 ---
 
 ## Architecture decision notes
 
-**Why self-hosted instead of GitHub Actions?** Three reasons, in order: (1) distinct bot identity requires a GitHub App, which requires a webhook receiver you host; (2) no GitHub-side review timeout — the webhook acks in milliseconds, the LLM call runs on a background task, so slow models are fine; (3) one App install covers all repos, no per-repo workflow + secret.
+**Why self-hosted instead of GitHub Actions?** A GitHub App provides a distinct bot identity and one installation across
+multiple repositories. The webhook is acknowledged immediately while slow review work runs in the background.
 
-**Why Ollama Cloud as the default instead of local Ollama / another provider?** No GPU box required, any model in the catalog, pay-per-token. To switch to local Ollama later, change `api_base` in `.secrets.toml` and `CONFIG__MODEL` — no code changes. To switch to Neuralwatt or any other OpenAI-compatible provider, change the model prefix to `openai/...`, fill in `[openai]`, and comment out `[ollama]` — see "Choosing an LLM provider" above. The provider layer is config-only by design: pr-agent already routes by model prefix through litellm, so adding a provider is never a code change in this fork.
+**Why a dedicated Porkbun domain?** It isolates webhook DNS and API permissions from existing web and mail domains.
+Changing the deployment requires only `PORKBUN_ZONE` and the GitHub Webhook URL.
 
-**Why a child Docker image instead of editing upstream?** Zero merge debt. `git pull` + rebuild picks up upstream fixes; the webhook shim is one file copied on top. No patches to reapply.
+**Why Caddy owns DNS, TLS, and ingress?** One process observes the WAN IPv4, updates the direct `A` record, completes
+DNS-01, persists certificate state, redirects HTTP, and proxies to a private Docker service. There is no certificate
+copy job and no direct PR-agent host port.
 
-**Why env vars for config instead of a mounted `configuration.toml`?** pr-agent's `config_loader.py` loads `settings_prod/.secrets.toml` but NOT `settings_prod/configuration.toml` — a config file mounted there is silently ignored. Env vars (dynaconf env_loader) are the supported override path and win over upstream defaults. JSON-array and boolean env vars parse correctly to lists/bools even with `AUTO_CAST_FOR_DYNACONF=false` (verified — dynaconf's `parse_with_toml` handles it).
+**Why HMAC instead of Basic Auth or an IP allowlist?** GitHub signs every delivery with the shared webhook secret.
+Basic Auth would break deliveries, while provider IP ranges can change. Constant-time HMAC validation authenticates
+the payload without ongoing network-list maintenance.
+
+**Why a child PR-agent image instead of editing upstream?** The boot guard and entrypoint stay isolated, minimizing
+merge debt when upstream changes.
+
+**Why environment variables instead of a mounted `configuration.toml`?** PR-agent loads
+`settings_prod/.secrets.toml`, but not `settings_prod/configuration.toml`. Dynaconf environment variables are the
+supported override path and take precedence over baked-in defaults.
 
 ---
 

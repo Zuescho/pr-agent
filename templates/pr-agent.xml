@@ -3,29 +3,23 @@
     <Name>pr-agent</Name>
     <Repository>ghcr.io/zuescho/pr-agent:latest</Repository>
     <Registry/>
-    <Network>bridge</Network>
+    <Network>pr-agent-net</Network>
     <Shell>sh</Shell>
     <Privileged>false</Privileged>
     <Support>https://github.com/the-pr-agent/pr-agent/issues</Support>
     <Project>https://github.com/the-pr-agent/pr-agent</Project>
-    <Overview>Self-hosted AI code reviewer (the-pr-agent/pr-agent) running as a GitHub App. Receives pull_request webhooks from GitHub, reviews diffs with an LLM (Ollama Cloud by default; Neuralwatt or any OpenAI-compatible endpoint via the model prefix), and posts comments back as a distinct bot identity. No GitHub Actions runner spin-up; the webhook acks immediately and the LLM call runs on a background task with no GitHub-side timeout. Webhook-only image: no /status page, so the port can go directly behind a public tunnel (Cloudflare Tunnel / Tailscale Funnel) without guarding a status page. The webhook itself is HMAC-guarded and the image refuses to start without a webhook secret. The image is prebuilt by CI and published to GHCR: docker pull ghcr.io/zuescho/pr-agent:latest (public, no login needed). To build locally instead: (1) docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .  (2) docker build -t local/pr-agent:github_app-webhook -f deploy/Dockerfile.webhook .  and set the Repository below to local/pr-agent:github_app-webhook.</Overview>
+    <Overview>Self-hosted AI code reviewer (the-pr-agent/pr-agent) running as a GitHub App. Receives pull_request webhooks from GitHub, reviews diffs with an LLM (Ollama Cloud by default; Neuralwatt or any OpenAI-compatible endpoint via the model prefix), and posts comments as a distinct bot identity. This webhook-only container stays private on the user-defined pr-agent-net network; the companion Caddy container owns public DNS, TLS, and host ports and proxies to pr-agent:3000. The webhook is HMAC-guarded and the image refuses to start without a webhook secret. The image is prebuilt by CI and published to GHCR: docker pull ghcr.io/zuescho/pr-agent:latest.</Overview>
     <Category>Cloud: Productivity:Tools</Category>
-    <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+    <WebUI/>
     <Icon>https://raw.githubusercontent.com/the-pr-agent/pr-agent/main/docs/assets/pr_agent_logo.png</Icon>
     <ExtraParams/>
     <PostArgs/>
     <CPUset/>
-    <Description>Self-hosted AI PR reviewer with a pluggable LLM backend (Ollama Cloud by default; switch to Neuralwatt or any OpenAI-compatible endpoint by changing the model prefix). Set the LLM model below (the prefix chooses the provider), point the secrets file at your filled-in .secrets.toml (provider API key + GitHub App credentials), and expose port 3000 behind a tunnel (Cloudflare Tunnel / Tailscale Funnel). No /status page to guard — the webhook is HMAC-guarded and the container refuses to start without a webhook secret. See README.md in the repo for the full walkthrough and the provider list.</Description>
+    <Description>Private PR-agent application container for the Porkbun/Caddy deployment. Set the LLM model below, mount the filled-in .secrets.toml, and attach this container to the pre-created pr-agent-net network. Do not publish port 3000; the companion caddy template reaches pr-agent:3000 through Docker DNS. See README.md for the full setup and the public URL https://pr-agent.PORKBUN_ZONE/.</Description>
 
     <Networking>
-        <Mode>bridge</Mode>
-        <Publish>
-            <Port>
-                <HostPort>3000</HostPort>
-                <ContainerPort>3000</ContainerPort>
-                <Protocol>tcp</Protocol>
-            </Port>
-        </Publish>
+        <Mode>pr-agent-net</Mode>
+        <Publish/>
     </Networking>
 
     <Data>
@@ -142,7 +136,6 @@
     <Config Name="LLM model" Target="CONFIG__MODEL" Default="ollama/kimi-k2.7-code" Mode="" Description="Which model reviews your PRs. The prefix chooses the provider: ollama/ = Ollama Cloud (uses [ollama] in .secrets.toml), openai/ = Neuralwatt or any OpenAI-compatible endpoint (uses [openai]). Fill in ONLY ONE provider section in .secrets.toml — if both are set, Ollama silently wins.&#10;&#10;Ollama Cloud:&#10;  ollama/kimi-k2.7-code&#10;  ollama/deepseek-v4-flash&#10;  ollama/deepseek-v4-pro&#10;  ollama/glm-5.2&#10;  ollama/kimi-k2.6&#10;  ollama/qwen3.5:122b&#10;  ollama/qwen3.5:27b&#10;  ollama/gpt-oss:120b&#10;  ollama/nemotron-3-ultra&#10;&#10;Neuralwatt (openai/ prefix):&#10;  openai/kimi-k2.7-code&#10;  openai/glm-5.2&#10;  openai/glm-5.2-fast&#10;  openai/qwen3.5-397b&#10;  openai/qwen3.5-397b-fast&#10;  openai/qwen3.6-35b&#10;  openai/kimi-k2.6&#10;  openai/gemma-4-31b&#10;&#10;Live Neuralwatt list: curl https://api.neuralwatt.com/v1/models" Type="Variable" Display="always" Required="true" Mask="false">ollama/kimi-k2.7-code</Config>
     <Config Name="Fallback LLM model(s)" Target="CONFIG__FALLBACK_MODELS" Default='["ollama/deepseek-v4-flash"]' Mode="" Description="Comma-separated JSON array of models tried if the primary errors or rate-limits. Use the SAME provider prefix as CONFIG__MODEL (ollama/ or openai/). Mixing prefixes works but means both [ollama] and [openai] must be set in .secrets.toml — NOT recommended (Ollama silently wins the api_base). Example: [&quot;ollama/deepseek-v4-flash&quot;,&quot;ollama/qwen3.5:122b&quot;] or [&quot;openai/glm-5.2-fast&quot;,&quot;openai/qwen3.6-35b&quot;]" Type="Variable" Display="always" Required="false" Mask="false">["ollama/deepseek-v4-flash"]</Config>
     <Config Name="Secrets file" Target="/app/pr_agent/settings_prod/.secrets.toml" Default="/mnt/user/appdata/pr-agent/.secrets.toml" Mode="ro" Description="Path to your filled-in .secrets.toml (copy secrets.example.toml from the repo and fill it in). Fill in EXACTLY ONE LLM provider section: [ollama] api_base + api_key (your https://ollama.com/settings/keys key) for Ollama Cloud, OR [openai] api_base + api_key for Neuralwatt / any OpenAI-compatible endpoint (Neuralwatt api_base = https://api.neuralwatt.com/v1, key from https://portal.neuralwatt.com). Always include [github] deployment_type='app', app_id (numeric), webhook_secret, private_key (the full PEM you downloaded from the GitHub App settings). Mounted read-only. This file is the ONLY place the GitHub App private key can live — Unraid GUI fields can't hold multi-line PEM." Type="Path" Display="always" Required="true" Mask="false"/>
-    <Config Name="Webhook port" Target="3000" Default="3000" Mode="tcp" Description="Port the webhook receiver listens on. GitHub POSTs to /api/v1/github_webhooks on this port. Put it behind your Cloudflare Tunnel / Tailscale Funnel / reverse proxy; do NOT expose it directly to the internet without TLS." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
     <Config Name="Model max input tokens" Target="CONFIG__CUSTOM_MODEL_MAX_TOKENS" Default="128000" Mode="" Description="Max input tokens the model accepts. kimi-k2.7-code and deepseek-v4 support 128k+; lower this if you pick a smaller-context model. Lets pr-agent's PR-compression fit large PRs in one call." Type="Variable" Display="advanced" Required="false" Mask="false">128000</Config>
     <Config Name="AI call timeout (seconds)" Target="CONFIG__AI_TIMEOUT" Default="300" Mode="" Description="Per-LLM-call timeout. The webhook acks GitHub in milliseconds and runs the review on a background task, so this can be generous without hitting GitHub's ~10s webhook timeout. 300s accommodates slow cloud models." Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
     <Config Name="Max model tokens (hard cap)" Target="CONFIG__MAX_MODEL_TOKENS" Default="128000" Mode="" Description="Hard cap on tokens usable by any model, regardless of its own default. Keep aligned with CUSTOM_MODEL_MAX_TOKENS." Type="Variable" Display="advanced" Required="false" Mask="false">128000</Config>

@@ -1,0 +1,29 @@
+{
+    email {$ACME_EMAIL}
+    dynamic_dns {
+        provider porkbun {
+            api_key {env.PORKBUN_API_KEY}
+            api_secret_key {env.PORKBUN_API_SECRET_KEY}
+        }
+        domains {
+            {$PORKBUN_ZONE} pr-agent
+        }
+        check_interval 5m
+        versions ipv4
+        ttl 10m
+    }
+}
+
+pr-agent.{$PORKBUN_ZONE} {
+    tls {
+        dns porkbun {
+            api_key {env.PORKBUN_API_KEY}
+            api_secret_key {env.PORKBUN_API_SECRET_KEY}
+        }
+    }
+    reverse_proxy pr-agent:3000
+    log {
+        output stdout
+        format console
+    }
+}

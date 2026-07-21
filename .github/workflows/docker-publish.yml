@@ -1,26 +1,26 @@
-# Builds the self-hosted pr-agent image (base github_app target + the webhook-only
-# child image) and publishes the webhook image to GHCR (GitHub Container Registry).
+# Builds the self-hosted webhook-only pr-agent image and its custom Caddy edge
+# proxy, then publishes both deployment images to GHCR.
 #
 # On push to main -> publish :latest + :<short-sha>.
 # On a v<semver> tag -> publish :<version> + :<major> + :<major>.<minor> + :latest.
 #
-# The webhook image is the one you deploy (no /status route — suitable for
-# putting the port directly behind a public tunnel). The base github_app image
-# is built only as an intermediate (loaded into the buildx daemon, not pushed):
-# the webhook Dockerfile FROMs it via the BASE_IMAGE build arg.
+# The webhook image is the one you deploy (no /status route). It stays private
+# on the Docker network while the Caddy image owns public DNS, TLS, and proxying.
+# The base github_app image is built only as an intermediate (loaded into the
+# buildx daemon, not pushed); the webhook Dockerfile FROMs it via BASE_IMAGE.
 #
-# Images (all point at the webhook image — HMAC-guarded webhook + GET / healthcheck):
+# Images:
 #   ghcr.io/zuescho/pr-agent:latest
-#   ghcr.io/zuescho/pr-agent:sha-<short>     (push to main)
-#   ghcr.io/zuescho/pr-agent:<version>      (vX.Y.Z tag)
+#   ghcr.io/zuescho/pr-agent-caddy:latest
+#   Both also receive matching sha-<short> and vX.Y.Z release tags.
 #
 # Pull on Unraid:
 #   docker pull ghcr.io/zuescho/pr-agent:latest
+#   docker pull ghcr.io/zuescho/pr-agent-caddy:latest
 #
 # Permissions: the default GITHUB_TOKEN authenticates to GHCR (packages: write).
-# No secrets to configure. The package is public-readable once created (set under
-# https://github.com/users/Zuescho/packages/container/pr-agent/settings if you
-# want private, but public is fine for a personal fork).
+# No build secrets are required. After each package is first created, set it to
+# public visibility in its GHCR package settings so Unraid can pull anonymously.
 #
 # amd64 only — arm64 via QEMU makes the base pip install take 15-20+ min, and an
 # Unraid box is almost always x86. Add linux/arm64 later only if you run arm.
@@ -63,6 +63,19 @@ jobs:
         with:
           images: ghcr.io/zuescho/pr-agent
           # On main push: latest + short sha. On vX.Y.Z tag: version + majors + latest.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Docker meta (Caddy)
+        id: caddy-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/zuescho/pr-agent-caddy
+          # Keep the proxy and application images on the same tag contract.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short,prefix=sha-,enable={{is_default_branch}}
@@ -117,3 +130,15 @@ jobs:
           docker rmi ghcr.io/zuescho/pr-agent:tmp 2>/dev/null || true
         env:
           TAGS_OUT: ${{ steps.meta.outputs.tags }}
+
+      - name: Build and push Caddy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deploy/Dockerfile.caddy
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.caddy-meta.outputs.tags }}
+          labels: ${{ steps.caddy-meta.outputs.labels }}
+          cache-from: type=gha,scope=caddy
+          cache-to: type=gha,mode=max,scope=caddy

@@ -1,38 +1,33 @@
-# Unraid / Docker Compose for self-hosted pr-agent (GitHub App mode).
+# Unraid / Docker Compose deployment for the webhook-only PR-agent and its
+# public Caddy edge. Create the shared network once before starting the project:
+#   docker network create pr-agent-net
 #
-# Build the image once:
-#   docker build --target github_app -t local/pr-agent:github_app -f docker/Dockerfile .
+# Only Caddy publishes host ports. PR-agent remains reachable solely as
+# pr-agent:3000 on pr-agent-net.
 #
-# Then add the status page (thin layer on top, no upstream edits):
-#   docker build -t local/pr-agent:github_app-status -f deploy/Dockerfile.status .
+# SECRETS: mount the filled-in GitHub/LLM secrets file read-only at:
+#   /app/pr_agent/settings_prod/.secrets.toml
+# It lives at /mnt/user/appdata/pr-agent/.secrets.toml on Unraid.
 #
-# Then on Unraid either:
-#   - install the "Docker Compose Manager" plugin and point it at this file, or
-#   - use the Add Container UI with the values mapped below (see README.md).
+# CADDY: copy deploy/Caddyfile to /mnt/user/appdata/caddy/Caddyfile. Supply
+# PORKBUN_ZONE, PORKBUN_API_KEY, and PORKBUN_API_SECRET_KEY through an ignored
+# Compose .env or the process environment; never commit them.
 #
-# SECRETS: mount the filled-in secrets file read-only at the settings_prod path.
-#   /app/pr_agent/settings_prod/.secrets.toml  (from secrets.example.toml, filled in)
-# It lives under /mnt/user/appdata/pr-agent/ on Unraid.
-#
-# CONFIG OVERRIDES: pr-agent loads settings_prod/.secrets.toml but NOT a
+# CONFIG OVERRIDES: pr-agent loads settings_prod/.secrets.toml but not a
 # settings_prod/configuration.toml, so non-secret config is supplied via env
-# vars (dynaconf env_loader is active and env wins over file defaults). The
-# double-underscore separator maps to dotted keys, e.g. CONFIG__MODEL == config.model.
+# vars. The double-underscore separator maps dotted keys, e.g.
+# CONFIG__MODEL == config.model.
 
 services:
   pr-agent:
-    # The webhook image (base github_app + the webhook_app shim — HMAC-guarded
-    # webhook + GET / healthcheck, NO /status page). Prebuilt on every push to
-    # main / vX.Y.Z tag by .github/workflows/docker-publish.yml and published to
-    # GHCR (public, no login needed to pull). To use a locally built image
-    # instead, swap to local/pr-agent:github_app-webhook. To serve the /status
-    # page (which exposes repo/PR activity — guard it), build the status image
-    # instead: local/pr-agent:github_app-status from deploy/Dockerfile.status.
+    # The webhook image exposes the HMAC-guarded webhook and GET / healthcheck.
+    # It is published on every push to main / vX.Y.Z tag by
+    # .github/workflows/docker-publish.yml. Caddy is its only public ingress.
     image: ghcr.io/zuescho/pr-agent:latest
     container_name: pr-agent
     restart: unless-stopped
-    ports:
-      - "3000:3000"          # webhook receiver. Put behind your reverse proxy / tunnel.
+    networks:
+      - pr-agent-net
     environment:
       # --- LLM backend (choose ONE provider via the model prefix) ---
       # pr-agent routes by the prefix on CONFIG__MODEL:
@@ -88,3 +83,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  caddy:
+    image: ghcr.io/zuescho/pr-agent-caddy:latest
+    container_name: caddy
+    restart: unless-stopped
+    networks:
+      - pr-agent-net
+    ports:
+      - "18080:80"
+      - "18443:443"
+    environment:
+      ACME_EMAIL: "${ACME_EMAIL:-github@zuescho.de}"
+      PORKBUN_ZONE: "${PORKBUN_ZONE:?PORKBUN_ZONE is required}"
+      PORKBUN_API_KEY: "${PORKBUN_API_KEY:?PORKBUN_API_KEY is required}"
+      PORKBUN_API_SECRET_KEY: "${PORKBUN_API_SECRET_KEY:?PORKBUN_API_SECRET_KEY is required}"
+    volumes:
+      - /mnt/user/appdata/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/user/appdata/caddy/data:/data
+      - /mnt/user/appdata/caddy/config:/config
+
+networks:
+  pr-agent-net:
+    external: true
+    name: pr-agent-net

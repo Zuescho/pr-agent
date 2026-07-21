@@ -1,0 +1,87 @@
+<?xml version="1.0"?>
+<Container version="2">
+    <Name>caddy</Name>
+    <Repository>ghcr.io/zuescho/pr-agent-caddy:latest</Repository>
+    <Registry/>
+    <Network>pr-agent-net</Network>
+    <Shell>sh</Shell>
+    <Privileged>false</Privileged>
+    <Support>https://github.com/Zuescho/pr-agent/issues</Support>
+    <Project>https://github.com/Zuescho/pr-agent</Project>
+    <Overview>Dedicated public edge for the self-hosted PR-agent. Maintains the pr-agent A record in a Porkbun-hosted DNS zone, obtains and renews its own certificate through DNS-01, and proxies HTTPS traffic to the private pr-agent container. Requires the pre-created pr-agent-net Docker network and a domain-scoped Porkbun API key.</Overview>
+    <Category>Network:Web</Category>
+    <WebUI/>
+    <Icon/>
+    <ExtraParams/>
+    <PostArgs/>
+    <CPUset/>
+    <Description>Caddy edge proxy for PR-agent. The public URL is https://pr-agent.PORKBUN_ZONE/. Forward router TCP 80 to host port 18080 and TCP 443 to host port 18443. Never forward PR-agent port 3000 or Caddy admin port 2019.</Description>
+
+    <Networking>
+        <Mode>pr-agent-net</Mode>
+        <Publish>
+            <Port>
+                <HostPort>18080</HostPort>
+                <ContainerPort>80</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+            <Port>
+                <HostPort>18443</HostPort>
+                <ContainerPort>443</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+        </Publish>
+    </Networking>
+
+    <Data>
+        <Volume>
+            <HostDir>/mnt/user/appdata/caddy/Caddyfile</HostDir>
+            <ContainerDir>/etc/caddy/Caddyfile</ContainerDir>
+            <Mode>ro</Mode>
+        </Volume>
+        <Volume>
+            <HostDir>/mnt/user/appdata/caddy/data</HostDir>
+            <ContainerDir>/data</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+        <Volume>
+            <HostDir>/mnt/user/appdata/caddy/config</HostDir>
+            <ContainerDir>/config</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+    </Data>
+
+    <Environment>
+        <Variable>
+            <Value/>
+            <Name>PORKBUN_ZONE</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value/>
+            <Name>PORKBUN_API_KEY</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value/>
+            <Name>PORKBUN_API_SECRET_KEY</Name>
+            <Mode/>
+        </Variable>
+        <Variable>
+            <Value>github@zuescho.de</Value>
+            <Name>ACME_EMAIL</Name>
+            <Mode/>
+        </Variable>
+    </Environment>
+
+    <Labels/>
+    <Config Name="Porkbun DNS zone" Target="PORKBUN_ZONE" Default="" Mode="" Description="Purchased registrable domain hosted on Porkbun nameservers, for example example.net. Enter only the zone; Caddy publishes pr-agent.example.net." Type="Variable" Display="always" Required="true" Mask="false"/>
+    <Config Name="Porkbun API key" Target="PORKBUN_API_KEY" Default="" Mode="" Description="Dedicated Porkbun API key restricted to this domain. Enable API Access for the domain. Do not restrict the key by source IP because the WAN address changes." Type="Variable" Display="always" Required="true" Mask="true"/>
+    <Config Name="Porkbun API secret key" Target="PORKBUN_API_SECRET_KEY" Default="" Mode="" Description="One-time secret for the dedicated domain-scoped Porkbun API key. Keep it only in this masked field." Type="Variable" Display="always" Required="true" Mask="true"/>
+    <Config Name="ACME account email" Target="ACME_EMAIL" Default="github@zuescho.de" Mode="" Description="Email used for Caddy's ACME account and certificate-expiry notices." Type="Variable" Display="always" Required="false" Mask="false">github@zuescho.de</Config>
+    <Config Name="Caddyfile" Target="/etc/caddy/Caddyfile" Default="/mnt/user/appdata/caddy/Caddyfile" Mode="ro" Description="Copy deploy/Caddyfile from this repository here. Mounted read-only." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/Caddyfile</Config>
+    <Config Name="Caddy data" Target="/data" Default="/mnt/user/appdata/caddy/data" Mode="rw" Description="Persistent ACME accounts, certificates, and private keys. Back up and protect this directory." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/data</Config>
+    <Config Name="Caddy config state" Target="/config" Default="/mnt/user/appdata/caddy/config" Mode="rw" Description="Persistent Caddy configuration state." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/caddy/config</Config>
+    <Config Name="HTTP host port" Target="80" Default="18080" Mode="tcp" Description="Router target for public TCP 80. Keep 18080 unless another Unraid service uses it." Type="Port" Display="always" Required="true" Mask="false">18080</Config>
+    <Config Name="HTTPS host port" Target="443" Default="18443" Mode="tcp" Description="Router target for public TCP 443. Keep 18443 unless another Unraid service uses it." Type="Port" Display="always" Required="true" Mask="false">18443</Config>
+</Container>
